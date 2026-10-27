@@ -1,4 +1,4 @@
-//! Windows 平台层：前台窗口探测、窗口样式、不抢焦点的显示/隐藏、单实例。
+//! Windows 平台层：窗口层级/屏幕探测、窗口样式、不抢焦点的显示/隐藏、单实例。
 //!
 //! 和 HoverNote 一样手写 FFI，不引入 `windows` crate，免得被它的大版本牵着走。
 //! 这个程序只服务 Windows 上的 Claude 桌面端，所以整个模块不做跨平台桩。
@@ -98,6 +98,9 @@ mod ffi {
     #[link(name = "user32")]
     extern "system" {
         pub fn EnumWindows(cb: unsafe extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
+        pub fn EnumDisplayMonitors(dc: isize, clip: *const Rect,
+            cb: unsafe extern "system" fn(isize, isize, *mut Rect, isize) -> i32, data: isize) -> i32;
+        pub fn GetClassNameW(hwnd: isize, text: *mut u16, len: i32) -> i32;
         pub fn GetWindow(hwnd: isize, cmd: u32) -> isize;
         pub fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
         pub fn GetWindowRect(hwnd: isize, rect: *mut Rect) -> i32;
@@ -121,34 +124,59 @@ mod ffi {
 }
 
 unsafe extern "system" fn collect(hwnd: isize, lparam: isize) -> i32 {
-    let out = &mut *(lparam as *mut Vec<(isize, u32)>);
-    if ffi::IsWindowVisible(hwnd) == 0 || ffi::IsIconic(hwnd) != 0 || ffi::GetWindow(hwnd, ffi::GW_OWNER) != 0 {
+    let out = &mut *(lparam as *mut Vec<crate::visibility::Window>);
+    if ffi::IsWindowVisible(hwnd) == 0 || ffi::IsIconic(hwnd) != 0 {
         return 1;
     }
-    if ffi::GetWindowLongW(hwnd, ffi::GWL_EXSTYLE) & ffi::WS_EX_TOOLWINDOW != 0 {
-        return 1;
-    }
-    // 在别的虚拟桌面上的窗口 IsWindowVisible 也是真，但 DWM 把它遮住了。
     let mut cloaked = 0u32;
     ffi::DwmGetWindowAttribute(hwnd, ffi::DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, 4);
-    if cloaked != 0 {
-        return 1;
-    }
+    if cloaked != 0 { return 1; }
+    let Some(frame) = frame_rect(hwnd).filter(|r| r.w() > 0 && r.h() > 0) else { return 1 };
+    let ex = ffi::GetWindowLongW(hwnd, ffi::GWL_EXSTYLE);
+    let tool = ex & ffi::WS_EX_TOOLWINDOW != 0;
+    let owned = ffi::GetWindow(hwnd, ffi::GW_OWNER) != 0;
+    let mut name = [0u16; 256];
+    let len = ffi::GetClassNameW(hwnd, name.as_mut_ptr(), name.len() as i32);
+    let class = String::from_utf16_lossy(&name[..len.max(0) as usize]);
+    let shell = matches!(class.as_str(), "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd"
+        | "#32768" | "tooltips_class32");
+    // 穿透式浮层不影响应用层级；普通置顶应用和普通 owned 对话框依然算遮挡。
+    let click_through = ex & 0x0008_0000 != 0 && ex & 0x0000_0020 != 0;
+    let passive_overlay = ex & 0x0808_0008 == 0x0808_0008; // NOACTIVATE + LAYERED + TOPMOST
     let mut pid = 0u32;
     ffi::GetWindowThreadProcessId(hwnd, &mut pid);
+    let scale = dpi_scale(hwnd);
+    // 折角/额度条不是一律 TOOLWINDOW；只忽略这两个程序的小把手，展开的面板仍算遮挡。
+    let tiny_topmost = ex & 0x0000_0008 != 0
+        && frame.w() as f64 <= 96.0 * scale && frame.h() as f64 <= 96.0 * scale;
+    let utility_corner = tiny_topmost && image_path(pid).is_some_and(|p| {
+        p.rsplit(['\\', '/']).next().is_some_and(|n|
+            n.eq_ignore_ascii_case("hovernote.exe") || n.eq_ignore_ascii_case("quota-sidebar.exe"))
+    });
     if pid != 0 {
-        out.push((hwnd, pid));
+        out.push(crate::visibility::Window {
+            hwnd, pid, frame, scale, main_candidate: !tool && !owned,
+            ignored: tool || shell || click_through || passive_overlay || utility_corner || pid == std::process::id(), is_claude: false,
+        });
     }
     1
 }
 
-/// 屏幕上已显示的顶层窗口（没最小化、没被遮住、不是工具窗口）和各自的进程，
-/// 按 Z 序从上到下。「在后台」的窗口也在里面，只是排在后面。
-pub fn shown_windows() -> Vec<(isize, u32)> {
-    let mut out: Vec<(isize, u32)> = Vec::new();
-    unsafe {
-        ffi::EnumWindows(collect, &mut out as *mut Vec<(isize, u32)> as isize);
-    }
+/// 当前桌面已显示的窗口，按 Z 序从上到下；不以焦点判断，也不先丢掉普通应用对话框。
+pub fn shown_windows() -> Vec<crate::visibility::Window> {
+    let mut out: Vec<crate::visibility::Window> = Vec::new();
+    unsafe { ffi::EnumWindows(collect, &mut out as *mut _ as isize); }
+    out
+}
+
+unsafe extern "system" fn collect_monitor(_monitor: isize, _dc: isize, rect: *mut Rect, data: isize) -> i32 {
+    if !rect.is_null() { (&mut *(data as *mut Vec<Rect>)).push(*rect); }
+    1
+}
+
+pub fn monitors() -> Vec<Rect> {
+    let mut out: Vec<Rect> = Vec::new();
+    unsafe { ffi::EnumDisplayMonitors(0, std::ptr::null(), collect_monitor, &mut out as *mut _ as isize); }
     out
 }
 
@@ -362,6 +390,7 @@ mod tests {
         fn CreateWindowExW(ex: u32, class: *const u16, title: *const u16, style: u32,
             x: i32, y: i32, w: i32, h: i32, parent: isize, menu: isize, instance: isize, param: *const c_void) -> isize;
         fn DestroyWindow(hwnd: isize) -> i32;
+        fn SetThreadDpiAwarenessContext(context: isize) -> isize;
         fn SendMessageW(hwnd: isize, msg: u32, wp: usize, lp: isize) -> isize;
     }
 
@@ -379,6 +408,24 @@ mod tests {
             seen.push((msg, ffi::GetWindowLongW(hwnd, ffi::GWL_STYLE), lp));
         }
         ffi::DefSubclassProc(hwnd, msg, wp, lp)
+    }
+
+    #[test]
+    #[ignore = "read-only diagnostic of the current desktop, not a deterministic regression"]
+    fn desktop_visibility_snapshot() {
+        // cargo test 没有 Tauri 的 DPI manifest；诊断线程也要按 PMv2 读取物理屏幕边界。
+        let previous = unsafe { SetThreadDpiAwarenessContext(-4) };
+        assert_ne!(previous, 0);
+        let mut windows = shown_windows();
+        for w in &mut windows { w.is_claude = !w.ignored && is_claude_desktop(w.pid); }
+        let screens = monitors();
+        let assessments = crate::visibility::assess(&windows, &screens);
+        println!("monitors={screens:?}");
+        println!("windows={windows:#?}");
+        println!("assessments={assessments:#?}");
+        println!("selected={:?}", crate::visibility::choose(&assessments, None));
+        unsafe { SetThreadDpiAwarenessContext(previous); }
+        assert!(!screens.is_empty());
     }
 
     #[test]

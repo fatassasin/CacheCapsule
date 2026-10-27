@@ -4,7 +4,7 @@
 //! 当前会话的缓存前缀）。这里只管两件事：
 //!
 //! 1. 读写 mod 约定的文件，让人能看见状态、改设置；
-//! 2. 只要屏幕上有 Claude 桌面端的主窗口（哪怕在后台）就显示，并跟着它的窗口走。
+//! 2. Claude 主窗口在任一屏幕上没被其他应用遮挡就显示，并跟着它的窗口走。
 //!
 //! 约定的目录是 `%USERPROFILE%\.claude\cache-keepalive\`：
 //! - `settings.json`    胶囊写、mod 读：档位、开关、各档的间隔和次数、立即保活的计数；
@@ -12,6 +12,7 @@
 //! - `capsule.json`     胶囊自己的，记着相对 Claude 窗口的位置。
 
 mod win;
+mod visibility;
 
 use std::collections::HashMap;
 use std::fs;
@@ -21,16 +22,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State, WebviewWindow};
 
-/// 比它小的 Claude 窗口（弹出的小面板之类）不算主窗口：不为它显示，也不拿来当锚点。
-const MIN_MAIN_W: f64 = 480.0;
-const MIN_MAIN_H: f64 = 360.0;
 /// 第一次出现时离 Claude 窗口右、下边的距离（逻辑像素），大致落在输入框上方。
 const DEFAULT_OFF_R: f64 = 40.0;
 const DEFAULT_OFF_B: f64 = 130.0;
@@ -46,9 +44,10 @@ struct Anchor {
 struct Shared {
     /// 拖动由系统接管，进了它的模态循环；松手只能靠轮询鼠标左键发现。
     dragging: AtomicBool,
-    /// 最近一次前台的 Claude 主窗口。
+    /// 当前合格的 Claude 主窗口，与键盘焦点无关。
     claude: AtomicIsize,
     anchor: Mutex<Anchor>,
+    target: Mutex<Option<visibility::Target>>,
 }
 
 impl Shared {
@@ -60,6 +59,7 @@ impl Shared {
         Shared {
             dragging: AtomicBool::new(false),
             claude: AtomicIsize::new(0),
+            target: Mutex::new(None),
             anchor: Mutex::new(Anchor {
                 off_r: get("offR", DEFAULT_OFF_R),
                 off_b: get("offB", DEFAULT_OFF_B),
@@ -166,18 +166,13 @@ fn begin_drag(shared: State<Shared>) {
 
 /// 把窗口按记着的相对位置摆到 Claude 窗口上。
 fn follow(hwnd: isize, shared: &Shared) {
-    let claude = shared.claude.load(Ordering::Relaxed);
-    if claude == 0 {
-        return;
-    }
-    let (Some(c), Some(w)) = (win::frame_rect(claude), win::window_rect(hwnd)) else { return };
-    let s = win::dpi_scale(hwnd);
+    let Some(target) = *shared.target.lock().unwrap() else { return };
+    let Some(w) = win::window_rect(hwnd) else { return };
     let (off_r, off_b) = {
         let a = shared.anchor.lock().unwrap();
         (a.off_r, a.off_b)
     };
-    let x = (c.right - (off_r * s).round() as i32 - w.w()).max(c.left);
-    let y = (c.bottom - (off_b * s).round() as i32 - w.h()).max(c.top);
+    let (x, y) = visibility::position(target, (w.w(), w.h()), (off_r, off_b));
     if x != w.left || y != w.top {
         win::move_to(hwnd, x, y);
     }
@@ -187,7 +182,7 @@ fn follow(hwnd: isize, shared: &Shared) {
 fn capture(hwnd: isize, shared: &Shared) {
     let claude = shared.claude.load(Ordering::Relaxed);
     let (Some(c), Some(w)) = (win::frame_rect(claude), win::window_rect(hwnd)) else { return };
-    let s = win::dpi_scale(hwnd);
+    let s = win::dpi_scale(claude);
     let (off_r, off_b) = ((c.right - w.right) as f64 / s, (c.bottom - w.bottom) as f64 / s);
     {
         let mut a = shared.anchor.lock().unwrap();
@@ -198,49 +193,63 @@ fn capture(hwnd: isize, shared: &Shared) {
     trace(&format!("saved offset r={off_r:.1} b={off_b:.1}"));
 }
 
-/// 盯着屏幕上有没有 Claude 桌面端的主窗口：有就显示、跟着它走，没有（关了、
-/// 收进托盘、最小化）就藏起来。它在不在最前面不重要，被别的窗口盖着也照常显示。
+/// 按每屏 Z 序和遮挡判断，而不是焦点。右屏操作不会隐藏左屏未被遮挡的 Claude。
 fn watch(handle: tauri::AppHandle, hwnd: isize) {
     let shared = handle.state::<Shared>();
-    let own_pid = std::process::id();
     let mut is_claude: HashMap<u32, bool> = HashMap::new();
     let mut shown = false;
+    let mut hide_since: Option<Instant> = None;
+    let mut last_diagnostic = String::new();
 
     loop {
         std::thread::sleep(Duration::from_millis(100));
         win::keep_frameless(hwnd);
-
-        let s = win::dpi_scale(hwnd);
-        if is_claude.len() > 512 {
-            is_claude.clear();
+        let mut windows = win::shown_windows();
+        let monitors = win::monitors();
+        // 只缓存当前快照内的 PID，避免退出后的 PID 复用沿用旧结论。
+        is_claude.retain(|pid, _| windows.iter().any(|w| w.pid == *pid));
+        for w in &mut windows {
+            if !w.ignored {
+                w.is_claude = *is_claude.entry(w.pid).or_insert_with(|| win::is_claude_desktop(w.pid));
+            }
         }
-        let main = win::shown_windows().into_iter().find(|&(h, pid)| {
-            pid != own_pid
-                && *is_claude.entry(pid).or_insert_with(|| win::is_claude_desktop(pid))
-                && win::frame_rect(h)
-                    .is_some_and(|r| r.w() as f64 >= MIN_MAIN_W * s && r.h() as f64 >= MIN_MAIN_H * s)
-        });
-        let want = main.is_some();
-        if let Some((h, _)) = main {
-            shared.claude.store(h, Ordering::Relaxed);
+        let current = *shared.target.lock().unwrap();
+        let assessments = visibility::assess(&windows, &monitors);
+        let dragging = shared.dragging.load(Ordering::Relaxed);
+        let mut target = visibility::choose(&assessments, current);
+        if dragging {
+            // 拖动时只认原目标，不能把松手位置记到另一扇 Claude 上。
+            target = target.filter(|t| current.is_some_and(|old| t.hwnd == old.hwnd));
         }
-
-        if want && !shown {
-            follow(hwnd, &shared);
-            win::show_topmost_noactivate(hwnd);
-            shown = true;
-            trace("show");
-        } else if !want && shown {
-            win::hide(hwnd);
-            shown = false;
-            shared.dragging.store(false, Ordering::Relaxed);
-            trace("hide");
+        if std::env::var_os("CACHECAPSULE_TRACE").is_some() {
+            let diagnosis = format!("visibility target={target:?} monitors={monitors:?} candidates={assessments:?}");
+            if diagnosis != last_diagnostic {
+                trace(&diagnosis);
+                last_diagnostic = diagnosis;
+            }
         }
-        if !want {
+        if let Some(t) = target {
+            hide_since = None;
+            *shared.target.lock().unwrap() = Some(t);
+            shared.claude.store(t.hwnd, Ordering::Relaxed);
+            if !shown {
+                follow(hwnd, &shared);
+                win::show_topmost_noactivate(hwnd);
+                shown = true;
+                trace("show");
+            }
+        } else {
+            let since = hide_since.get_or_insert_with(Instant::now);
+            if shown && (dragging || since.elapsed() >= Duration::from_millis(200)) {
+                win::hide(hwnd);
+                shown = false;
+                shared.dragging.store(false, Ordering::Relaxed);
+                trace("hide");
+            }
             continue;
         }
 
-        if shared.dragging.load(Ordering::Relaxed) {
+        if dragging {
             if !win::left_button_down() {
                 shared.dragging.store(false, Ordering::Relaxed);
                 capture(hwnd, &shared);
