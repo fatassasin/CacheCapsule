@@ -4,7 +4,7 @@
 //! 当前会话的缓存前缀）。这里只管两件事：
 //!
 //! 1. 读写 mod 约定的文件，让人能看见状态、改设置；
-//! 2. 只在 Claude 桌面端位于最上层时显示，并跟着它的窗口走。
+//! 2. 只要屏幕上有 Claude 桌面端的主窗口（哪怕在后台）就显示，并跟着它的窗口走。
 //!
 //! 约定的目录是 `%USERPROFILE%\.claude\cache-keepalive\`：
 //! - `settings.json`    胶囊写、mod 读：档位、开关、各档的间隔和次数、立即保活的计数；
@@ -13,6 +13,7 @@
 
 mod win;
 
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
 use std::os::windows::process::CommandExt;
@@ -197,43 +198,31 @@ fn capture(hwnd: isize, shared: &Shared) {
     trace(&format!("saved offset r={off_r:.1} b={off_b:.1}"));
 }
 
-/// 盯着前台窗口：Claude 桌面端在最上面就显示、跟着走，否则藏起来。
-///
-/// 胶囊自己在最上面（刚点了它）也算数，不然一点它它就把自己藏了；
-/// 从它再点到别的程序上，前台不再是 Claude 也不再是它，才会收起。
+/// 盯着屏幕上有没有 Claude 桌面端的主窗口：有就显示、跟着它走，没有（关了、
+/// 收进托盘、最小化）就藏起来。它在不在最前面不重要，被别的窗口盖着也照常显示。
 fn watch(handle: tauri::AppHandle, hwnd: isize) {
     let shared = handle.state::<Shared>();
     let own_pid = std::process::id();
-    let (mut cached_pid, mut cached_is_claude) = (0u32, false);
+    let mut is_claude: HashMap<u32, bool> = HashMap::new();
     let mut shown = false;
 
     loop {
         std::thread::sleep(Duration::from_millis(100));
 
-        let mut ours = false;
-        let mut claude_fg = false;
-        if let Some((h, pid)) = win::foreground() {
-            if pid == own_pid {
-                ours = true;
-            } else {
-                if pid != cached_pid {
-                    cached_pid = pid;
-                    cached_is_claude = win::is_claude_desktop(pid);
-                }
-                if cached_is_claude {
-                    let s = win::dpi_scale(hwnd);
-                    if let Some(r) = win::frame_rect(h) {
-                        if r.w() as f64 >= MIN_MAIN_W * s && r.h() as f64 >= MIN_MAIN_H * s {
-                            shared.claude.store(h, Ordering::Relaxed);
-                            claude_fg = true;
-                        }
-                    }
-                }
-            }
+        let s = win::dpi_scale(hwnd);
+        if is_claude.len() > 512 {
+            is_claude.clear();
         }
-
-        let claude = shared.claude.load(Ordering::Relaxed);
-        let want = claude_fg || (ours && claude != 0 && win::is_usable(claude));
+        let main = win::shown_windows().into_iter().find(|&(h, pid)| {
+            pid != own_pid
+                && *is_claude.entry(pid).or_insert_with(|| win::is_claude_desktop(pid))
+                && win::frame_rect(h)
+                    .is_some_and(|r| r.w() as f64 >= MIN_MAIN_W * s && r.h() as f64 >= MIN_MAIN_H * s)
+        });
+        let want = main.is_some();
+        if let Some((h, _)) = main {
+            shared.claude.store(h, Ordering::Relaxed);
+        }
 
         if want && !shown {
             follow(hwnd, &shared);

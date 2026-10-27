@@ -47,7 +47,7 @@ body {
   box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
 }
 .pop[hidden] { display: none; }
-.chip, .pop { zoom: .667; }
+.chip, .pop { zoom: .889; }
 .head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; cursor: move; }
 .head h3 { margin: 0; font-size: 17px; font-weight: 500; color: var(--dim); display: flex; align-items: center; gap: 8px; }
 .pill { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--ju-soft); color: var(--ju); }

@@ -31,6 +31,8 @@ mod ffi {
 
     pub const DWMWA_BORDER_COLOR: u32 = 34;
     pub const DWMWA_EXTENDED_FRAME_BOUNDS: u32 = 9;
+    pub const DWMWA_CLOAKED: u32 = 14;
+    pub const GW_OWNER: u32 = 4;
     /// DWMWA_COLOR_NONE：让 DWM 干脆不画窗口边线。
     pub const DWM_COLOR_NONE: u32 = 0xFFFF_FFFE;
     pub const ERROR_ALREADY_EXISTS: u32 = 183;
@@ -38,6 +40,7 @@ mod ffi {
 
     pub const GWL_STYLE: i32 = -16;
     pub const GWL_EXSTYLE: i32 = -20;
+    pub const WS_POPUP: u32 = 0x8000_0000;
     pub const WS_CAPTION: i32 = 0x00C0_0000;
     pub const WS_SYSMENU: i32 = 0x0008_0000;
     pub const WS_MINIMIZEBOX: i32 = 0x0002_0000;
@@ -79,10 +82,10 @@ mod ffi {
 
     #[link(name = "user32")]
     extern "system" {
-        pub fn GetForegroundWindow() -> isize;
+        pub fn EnumWindows(cb: unsafe extern "system" fn(isize, isize) -> i32, lparam: isize) -> i32;
+        pub fn GetWindow(hwnd: isize, cmd: u32) -> isize;
         pub fn GetWindowThreadProcessId(hwnd: isize, pid: *mut u32) -> u32;
         pub fn GetWindowRect(hwnd: isize, rect: *mut Rect) -> i32;
-        pub fn IsWindow(hwnd: isize) -> i32;
         pub fn IsWindowVisible(hwnd: isize) -> i32;
         pub fn IsIconic(hwnd: isize) -> i32;
         pub fn ShowWindow(hwnd: isize, cmd: i32) -> i32;
@@ -102,17 +105,36 @@ mod ffi {
     }
 }
 
-/// 前台窗口和它所属的进程。
-pub fn foreground() -> Option<(isize, u32)> {
-    unsafe {
-        let hwnd = ffi::GetForegroundWindow();
-        if hwnd == 0 {
-            return None;
-        }
-        let mut pid = 0u32;
-        ffi::GetWindowThreadProcessId(hwnd, &mut pid);
-        (pid != 0).then_some((hwnd, pid))
+unsafe extern "system" fn collect(hwnd: isize, lparam: isize) -> i32 {
+    let out = &mut *(lparam as *mut Vec<(isize, u32)>);
+    if ffi::IsWindowVisible(hwnd) == 0 || ffi::IsIconic(hwnd) != 0 || ffi::GetWindow(hwnd, ffi::GW_OWNER) != 0 {
+        return 1;
     }
+    if ffi::GetWindowLongW(hwnd, ffi::GWL_EXSTYLE) & ffi::WS_EX_TOOLWINDOW != 0 {
+        return 1;
+    }
+    // 在别的虚拟桌面上的窗口 IsWindowVisible 也是真，但 DWM 把它遮住了。
+    let mut cloaked = 0u32;
+    ffi::DwmGetWindowAttribute(hwnd, ffi::DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, 4);
+    if cloaked != 0 {
+        return 1;
+    }
+    let mut pid = 0u32;
+    ffi::GetWindowThreadProcessId(hwnd, &mut pid);
+    if pid != 0 {
+        out.push((hwnd, pid));
+    }
+    1
+}
+
+/// 屏幕上已显示的顶层窗口（没最小化、没被遮住、不是工具窗口）和各自的进程，
+/// 按 Z 序从上到下。「在后台」的窗口也在里面，只是排在后面。
+pub fn shown_windows() -> Vec<(isize, u32)> {
+    let mut out: Vec<(isize, u32)> = Vec::new();
+    unsafe {
+        ffi::EnumWindows(collect, &mut out as *mut Vec<(isize, u32)> as isize);
+    }
+    out
 }
 
 /// 进程的可执行文件完整路径。
@@ -165,11 +187,6 @@ pub fn window_rect(hwnd: isize) -> Option<Rect> {
         let mut r = Rect::default();
         (ffi::GetWindowRect(hwnd, &mut r) != 0).then_some(r)
     }
-}
-
-/// 窗口还在、没最小化。
-pub fn is_usable(hwnd: isize) -> bool {
-    unsafe { ffi::IsWindow(hwnd) != 0 && ffi::IsIconic(hwnd) == 0 && ffi::IsWindowVisible(hwnd) != 0 }
 }
 
 pub fn dpi_scale(hwnd: isize) -> f64 {
@@ -247,13 +264,16 @@ fn commit_frame(hwnd: isize) {
     }
 }
 
-/// 无边框透明小窗的善后：摘标题栏样式（否则系统会强制一个最小宽度）、
+/// 无边框透明小窗的善后：摘标题栏样式并标成弹出窗口、
 /// 从 Alt+Tab 里摘出去、关掉 Win11 默认的 1px DWM 描边。
 pub fn prepare(hwnd: isize) {
     unsafe {
         let style = ffi::GetWindowLongW(hwnd, ffi::GWL_STYLE);
-        let next = style
-            & !(ffi::WS_CAPTION | ffi::WS_SYSMENU | ffi::WS_MINIMIZEBOX | ffi::WS_MAXIMIZEBOX);
+        // 样式为 0 的窗口是 WS_OVERLAPPED，系统认为它理应有标题栏：一激活（点胶囊）
+        // 就会补画一条带窗口标题的非客户区。明确标成弹出窗口，它就只有客户区。
+        let next = (style
+            & !(ffi::WS_CAPTION | ffi::WS_SYSMENU | ffi::WS_MINIMIZEBOX | ffi::WS_MAXIMIZEBOX))
+            | ffi::WS_POPUP as i32;
         if next != style {
             ffi::SetWindowLongW(hwnd, ffi::GWL_STYLE, next);
         }
