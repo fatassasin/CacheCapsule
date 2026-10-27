@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
@@ -198,7 +198,6 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
     let shared = handle.state::<Shared>();
     let mut is_claude: HashMap<u32, bool> = HashMap::new();
     let mut shown = false;
-    let mut hide_since: Option<Instant> = None;
     let mut last_diagnostic = String::new();
 
     loop {
@@ -229,7 +228,6 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
             }
         }
         if let Some(t) = target {
-            hide_since = None;
             *shared.target.lock().unwrap() = Some(t);
             shared.claude.store(t.hwnd, Ordering::Relaxed);
             if !shown {
@@ -239,8 +237,7 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
                 trace("show");
             }
         } else {
-            let since = hide_since.get_or_insert_with(Instant::now);
-            if shown && (dragging || since.elapsed() >= Duration::from_millis(200)) {
+            if shown {
                 win::hide(hwnd);
                 shown = false;
                 shared.dragging.store(false, Ordering::Relaxed);
