@@ -4,7 +4,7 @@
 //! 当前会话的缓存前缀）。这里只管两件事：
 //!
 //! 1. 读写 mod 约定的文件，让人能看见状态、改设置；
-//! 2. Claude 主窗口在任一屏幕上没被其他应用遮挡就显示，并跟着它的窗口走。
+//! 2. Claude 主窗口在任一屏幕上还有部分露出就显示，并跟着它的窗口走。
 //!
 //! 约定的目录是 `%USERPROFILE%\.claude\cache-keepalive\`：
 //! - `settings.json`    胶囊写、mod 读：档位、开关、各档的间隔和次数、立即保活的计数；
@@ -193,7 +193,7 @@ fn capture(hwnd: isize, shared: &Shared) {
     trace(&format!("saved offset r={off_r:.1} b={off_b:.1}"));
 }
 
-/// 按每屏 Z 序和遮挡判断，而不是焦点。右屏操作不会隐藏左屏未被遮挡的 Claude。
+/// 按每屏 Z 序和遮挡判断，而不是焦点。右屏操作和局部遮挡不会隐藏左屏仍露出的 Claude。
 fn watch(handle: tauri::AppHandle, hwnd: isize) {
     let shared = handle.state::<Shared>();
     let mut is_claude: HashMap<u32, bool> = HashMap::new();

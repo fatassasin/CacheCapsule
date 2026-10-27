@@ -35,6 +35,19 @@ pub fn intersection(a: Rect, b: Rect) -> Option<Rect> {
     (r.w() > 0 && r.h() > 0).then_some(r)
 }
 
+/// 从可见区域扣掉一扇上层窗口；四条不重叠的矩形保留精确的剩余区域。
+fn subtract(region: Rect, cover: Rect, out: &mut Vec<Rect>) {
+    let Some(hit) = intersection(region, cover) else { out.push(region); return };
+    for piece in [
+        Rect { bottom: hit.top, ..region },
+        Rect { top: hit.bottom, ..region },
+        Rect { top: hit.top, bottom: hit.bottom, right: hit.left, ..region },
+        Rect { top: hit.top, bottom: hit.bottom, left: hit.right, ..region },
+    ] {
+        if piece.w() > 0 && piece.h() > 0 { out.push(piece); }
+    }
+}
+
 pub fn assess(windows: &[Window], monitors: &[Rect]) -> Vec<Assessment> {
     let mut out = Vec::new();
     for (i, w) in windows.iter().enumerate() {
@@ -45,9 +58,18 @@ pub fn assess(windows: &[Window], monitors: &[Rect]) -> Vec<Assessment> {
         }
         for &monitor in monitors {
             let Some(clip) = intersection(w.frame, monitor) else { continue };
-            let blocker = windows[..i].iter()
-                .find(|above| !above.ignored && intersection(above.frame, clip).is_some())
-                .map(|above| above.hwnd);
+            let mut visible = vec![clip];
+            let mut blocker = None;
+            for above in windows[..i].iter().filter(|above| !above.ignored) {
+                let mut remaining = Vec::new();
+                for region in visible { subtract(region, above.frame, &mut remaining); }
+                visible = remaining;
+                if visible.is_empty() {
+                    // 可能是多扇窗口联合盖满，记录最后盖住剩余区域的句柄。
+                    blocker = Some(above.hwnd);
+                    break;
+                }
+            }
             out.push(Assessment {
                 target: Target { hwnd: w.hwnd, monitor, clip, frame: w.frame, scale: w.scale },
                 blocker,
@@ -96,11 +118,24 @@ mod tests {
         assert_eq!(pick(&ws, &[LEFT, RIGHT]).unwrap().hwnd, 1);
     }
     #[test]
-    fn full_and_partial_cover_hide_but_lower_z_does_not() {
-        for cover in [LEFT, r(0, 0, 20, 20)] {
-            assert!(pick(&[app(2, cover, false), app(1, LEFT, true)], &[LEFT]).is_none());
-            assert!(pick(&[app(1, LEFT, true), app(2, cover, false)], &[LEFT]).is_some());
+    fn partial_cover_shows_and_full_cover_hides() {
+        for cover in [r(0, 0, 20, 20), r(0, 0, 1919, 1080)] {
+            assert!(pick(&[app(2, cover, false), app(1, LEFT, true)], &[LEFT]).is_some());
         }
+        assert!(pick(&[app(2, LEFT, false), app(1, LEFT, true)], &[LEFT]).is_none());
+        assert!(pick(&[app(1, LEFT, true), app(2, LEFT, false)], &[LEFT]).is_some());
+    }
+    #[test]
+    fn multiple_covering_windows_are_combined_without_double_counting() {
+        let claude = app(1, LEFT, true);
+        let left_half = app(2, r(0, 0, 960, 1080), false);
+        let right_half = app(3, r(960, 0, 1920, 1080), false);
+        assert!(pick(&[left_half.clone(), right_half, claude.clone()], &[LEFT]).is_none());
+        // 两扇重复覆盖左半，面积相加虽等于整屏，右半仍然露出。
+        assert!(pick(&[left_half.clone(), left_half, claude.clone()], &[LEFT]).is_some());
+        // 中央只留 1px 的缝隙仍算露出。
+        assert!(pick(&[app(2, r(0, 0, 960, 1080), false),
+            app(3, r(961, 0, 1920, 1080), false), claude], &[LEFT]).is_some());
     }
     #[test]
     fn edge_touch_and_snapped_neighbours_do_not_cover() {
