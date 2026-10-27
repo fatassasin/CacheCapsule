@@ -29,6 +29,9 @@ impl Rect {
 mod ffi {
     use super::{c_void, Rect};
 
+    pub const DWMWA_NCRENDERING_POLICY: u32 = 2;
+    pub const DWMWA_TRANSITIONS_FORCEDISABLED: u32 = 3;
+    pub const DWMNCRP_DISABLED: i32 = 1;
     pub const DWMWA_BORDER_COLOR: u32 = 34;
     pub const DWMWA_EXTENDED_FRAME_BOUNDS: u32 = 9;
     pub const DWMWA_CLOAKED: u32 = 14;
@@ -41,6 +44,12 @@ mod ffi {
     pub const GWL_STYLE: i32 = -16;
     pub const GWL_EXSTYLE: i32 = -20;
     pub const WS_POPUP: u32 = 0x8000_0000;
+    pub const WS_VISIBLE: i32 = 0x1000_0000;
+    pub const WS_THICKFRAME: i32 = 0x0004_0000;
+    pub const WM_NCACTIVATE: u32 = 0x0086;
+    pub const WM_SETTEXT: u32 = 0x000C;
+    pub const WM_SETICON: u32 = 0x0080;
+    pub type SubclassProc = unsafe extern "system" fn(isize, u32, usize, isize, usize, usize) -> isize;
     pub const WS_CAPTION: i32 = 0x00C0_0000;
     pub const WS_SYSMENU: i32 = 0x0008_0000;
     pub const WS_MINIMIZEBOX: i32 = 0x0002_0000;
@@ -64,6 +73,12 @@ mod ffi {
         pub fn DwmSetWindowAttribute(hwnd: isize, attr: u32, value: *const c_void, size: u32)
             -> i32;
         pub fn DwmGetWindowAttribute(hwnd: isize, attr: u32, value: *mut c_void, size: u32) -> i32;
+    }
+
+    #[link(name = "comctl32")]
+    extern "system" {
+        pub fn SetWindowSubclass(hwnd: isize, proc: SubclassProc, id: usize, data: usize) -> i32;
+        pub fn DefSubclassProc(hwnd: isize, msg: u32, wp: usize, lp: isize) -> isize;
     }
 
     #[link(name = "kernel32")]
@@ -204,6 +219,8 @@ pub fn left_button_down() -> bool {
 
 /// 显示但不激活：Claude 正在输入时，胶囊冒出来绝不能把键盘焦点抢走。
 pub fn show_topmost_noactivate(hwnd: isize) {
+    disable_nc_rendering(hwnd);
+    keep_frameless(hwnd);
     unsafe {
         ffi::ShowWindow(hwnd, ffi::SW_SHOWNOACTIVATE);
         ffi::SetWindowPos(
@@ -264,19 +281,61 @@ fn commit_frame(hwnd: isize) {
     }
 }
 
-/// 无边框透明小窗的善后：摘标题栏样式并标成弹出窗口、
-/// 从 Alt+Tab 里摘出去、关掉 Win11 默认的 1px DWM 描边。
-pub fn prepare(hwnd: isize) {
+/// tao 可能按缓存的 WindowFlags 写回样式；只在被写回时修正，不反复刷新边框。
+pub fn keep_frameless(hwnd: isize) {
     unsafe {
         let style = ffi::GetWindowLongW(hwnd, ffi::GWL_STYLE);
-        // 样式为 0 的窗口是 WS_OVERLAPPED，系统认为它理应有标题栏：一激活（点胶囊）
-        // 就会补画一条带窗口标题的非客户区。明确标成弹出窗口，它就只有客户区。
         let next = (style
-            & !(ffi::WS_CAPTION | ffi::WS_SYSMENU | ffi::WS_MINIMIZEBOX | ffi::WS_MAXIMIZEBOX))
+            & !(ffi::WS_CAPTION | ffi::WS_SYSMENU | ffi::WS_MINIMIZEBOX | ffi::WS_MAXIMIZEBOX | ffi::WS_THICKFRAME))
             | ffi::WS_POPUP as i32;
         if next != style {
             ffi::SetWindowLongW(hwnd, ffi::GWL_STYLE, next);
+            commit_frame(hwnd);
         }
+    }
+}
+
+fn disable_nc_rendering(hwnd: isize) {
+    unsafe {
+        let off = ffi::DWMNCRP_DISABLED;
+        ffi::DwmSetWindowAttribute(hwnd, ffi::DWMWA_NCRENDERING_POLICY,
+            &off as *const i32 as *const c_void, 4);
+        let yes = 1i32;
+        ffi::DwmSetWindowAttribute(hwnd, ffi::DWMWA_TRANSITIONS_FORCEDISABLED,
+            &yes as *const i32 as *const c_void, 4);
+    }
+}
+
+/// 移植 Localless 的 no_caption_proc：DefWindowProc 在处理激活、标题和图标消息时
+/// 会直接画标题条，即便 WS_CAPTION 已删。消息仍交给 tao（保留焦点状态和输入），
+/// 只在调用期间暂摘 WS_VISIBLE，阻止系统绘制；不调用 ShowWindow，不真的藏窗。
+unsafe extern "system" fn no_caption_proc(
+    hwnd: isize, msg: u32, wp: usize, lp: isize, _id: usize, _data: usize,
+) -> isize {
+    if msg != ffi::WM_NCACTIVATE && msg != ffi::WM_SETTEXT && msg != ffi::WM_SETICON {
+        return ffi::DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    let lp = if msg == ffi::WM_NCACTIVATE { -1 } else { lp };
+    let style = ffi::GetWindowLongW(hwnd, ffi::GWL_STYLE);
+    if style & ffi::WS_VISIBLE == 0 {
+        return ffi::DefSubclassProc(hwnd, msg, wp, lp);
+    }
+    ffi::SetWindowLongW(hwnd, ffi::GWL_STYLE, style & !ffi::WS_VISIBLE);
+    let result = ffi::DefSubclassProc(hwnd, msg, wp, lp);
+    let current = ffi::GetWindowLongW(hwnd, ffi::GWL_STYLE);
+    ffi::SetWindowLongW(hwnd, ffi::GWL_STYLE, current | ffi::WS_VISIBLE);
+    crate::trace(&format!("caption-paint blocked msg={msg:#06x}"));
+    result
+}
+
+/// 必须从建窗口的线程调用（setup）：子类拦截、DWM 策略和样式三层一起处理。
+pub fn prepare(hwnd: isize) -> Result<(), &'static str> {
+    unsafe {
+        if ffi::SetWindowSubclass(hwnd, no_caption_proc, 1, 0) == 0 {
+            return Err("无法安装禁止标题栏绘制的窗口子类");
+        }
+        disable_nc_rendering(hwnd);
+        keep_frameless(hwnd);
         let ex = ffi::GetWindowLongW(hwnd, ffi::GWL_EXSTYLE);
         let next_ex = (ex & !ffi::WS_EX_APPWINDOW) | ffi::WS_EX_TOOLWINDOW;
         if next_ex != ex {
@@ -290,6 +349,81 @@ pub fn prepare(hwnd: isize) {
             std::mem::size_of::<u32>() as u32,
         );
         commit_frame(hwnd);
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[link(name = "user32")]
+    extern "system" {
+        fn CreateWindowExW(ex: u32, class: *const u16, title: *const u16, style: u32,
+            x: i32, y: i32, w: i32, h: i32, parent: isize, menu: isize, instance: isize, param: *const c_void) -> isize;
+        fn DestroyWindow(hwnd: isize) -> i32;
+        fn SendMessageW(hwnd: isize, msg: u32, wp: usize, lp: isize) -> isize;
+    }
+
+    struct TestWindow(isize);
+    impl Drop for TestWindow {
+        fn drop(&mut self) { unsafe { DestroyWindow(self.0); } }
+    }
+
+    // 挂在修复的下游，直接量 Windows 消息处理时看到的样式，不靠截图或模拟鼠标。
+    unsafe extern "system" fn probe(
+        hwnd: isize, msg: u32, wp: usize, lp: isize, _id: usize, data: usize,
+    ) -> isize {
+        if msg == ffi::WM_NCACTIVATE || msg == ffi::WM_SETTEXT || msg == ffi::WM_SETICON {
+            let seen = &mut *(data as *mut Vec<(u32, i32, isize)>);
+            seen.push((msg, ffi::GetWindowLongW(hwnd, ffi::GWL_STYLE), lp));
+        }
+        ffi::DefSubclassProc(hwnd, msg, wp, lp)
+    }
+
+    #[test]
+    fn caption_messages_cannot_paint_but_visibility_is_restored() {
+        let class: Vec<u16> = "STATIC\0".encode_utf16().collect();
+        let title: Vec<u16> = "caption regression\0".encode_utf16().collect();
+        unsafe {
+            // 原生窗口放在屏幕外，测试不改变用户桌面的焦点或鼠标。
+            let window = TestWindow(CreateWindowExW(ffi::WS_EX_TOOLWINDOW as u32, class.as_ptr(),
+                title.as_ptr(), ffi::WS_POPUP, -32000, -32000, 100, 50, 0, 0, 0, std::ptr::null()));
+            let h = window.0;
+            assert_ne!(h, 0);
+            let mut seen: Vec<(u32, i32, isize)> = Vec::new();
+            assert_ne!(ffi::SetWindowSubclass(h, probe, 2, &mut seen as *mut _ as usize), 0);
+            prepare(h).unwrap();
+            show_topmost_noactivate(h);
+            seen.clear();
+            for _ in 0..20 {
+                SendMessageW(h, ffi::WM_NCACTIVATE, 1, 0);
+                SendMessageW(h, ffi::WM_NCACTIVATE, 0, 0);
+                SendMessageW(h, ffi::WM_SETTEXT, 0, title.as_ptr() as isize);
+                SendMessageW(h, ffi::WM_SETICON, 0, 0);
+                assert_ne!(ffi::GetWindowLongW(h, ffi::GWL_STYLE) & ffi::WS_VISIBLE, 0);
+            }
+            assert_eq!(seen.len(), 80);
+            assert!(seen.iter().all(|&(_, style, _)| style & ffi::WS_VISIBLE == 0));
+            assert!(seen.iter().filter(|&&(msg, _, _)| msg == ffi::WM_NCACTIVATE).all(|&(_, _, lp)| lp == -1));
+            let mut nc_enabled = 1i32;
+            assert_eq!(ffi::DwmGetWindowAttribute(h, 1, // DWMWA_NCRENDERING_ENABLED（可读的 BOOL）
+                &mut nc_enabled as *mut i32 as *mut c_void, 4), 0);
+            assert_eq!(nc_enabled, 0);
+
+            // 模拟 tao 写回边框位，巡逻应再次清掉。
+            let style = ffi::GetWindowLongW(h, ffi::GWL_STYLE);
+            ffi::SetWindowLongW(h, ffi::GWL_STYLE, style | ffi::WS_CAPTION | ffi::WS_THICKFRAME);
+            keep_frameless(h);
+            let repaired = ffi::GetWindowLongW(h, ffi::GWL_STYLE);
+            assert_eq!(repaired & (ffi::WS_CAPTION | ffi::WS_THICKFRAME), 0);
+            assert_ne!(repaired as u32 & ffi::WS_POPUP, 0);
+            hide(h);
+            seen.clear();
+            SendMessageW(h, ffi::WM_SETTEXT, 0, title.as_ptr() as isize);
+            assert_eq!(ffi::GetWindowLongW(h, ffi::GWL_STYLE) & ffi::WS_VISIBLE, 0);
+            drop(window);
+        }
     }
 }
 

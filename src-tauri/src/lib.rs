@@ -208,6 +208,7 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
 
     loop {
         std::thread::sleep(Duration::from_millis(100));
+        win::keep_frameless(hwnd);
 
         let s = win::dpi_scale(hwnd);
         if is_claude.len() > 512 {
@@ -282,7 +283,7 @@ pub fn run() {
         .setup(|app| {
             let window = app.get_webview_window("main").ok_or("没有主窗口")?;
             let hwnd = hwnd_of(&window).ok_or("拿不到窗口句柄")?;
-            win::prepare(hwnd);
+            win::prepare(hwnd)?;
 
             let auto = CheckMenuItem::with_id(app, "autostart", "开机启动", true, autostart_on(), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 CacheCapsule", true, None::<&str>)?;
