@@ -1,0 +1,98 @@
+/* 磨砂黑 + 小克菊（Claude 橙）。和定稿视觉稿一致，只去掉演示用的舞台、输入框和说明。 */
+:root {
+  --frost: rgba(28, 27, 26, .94); --frost2: rgba(255, 255, 255, .045);
+  --line: rgba(255, 255, 255, .08); --line2: rgba(255, 255, 255, .14);
+  --text: #ece9e1; --dim: #a6a29a; --mute: #6f6c66;
+  --ju: #d97757; --ju-soft: rgba(217, 119, 87, .16);
+  --r: 14px;
+}
+* { box-sizing: border-box; }
+html, body { background: transparent; }
+body {
+  margin: 0; padding: 14px; height: 100vh; overflow: hidden; color: var(--text);
+  display: flex; justify-content: flex-end; align-items: flex-end;
+  font: 14px/1.45 "Segoe UI Variable Text", "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+  user-select: none; -webkit-user-select: none; cursor: default;
+}
+/* 内容多大窗口就多大：Rust 一侧按它的尺寸收放窗口，右下角不动，面板向上长。 */
+#wrap { display: inline-flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+
+/* 透明窗口里没有桌面可模糊，所以磨砂只剩颗粒和略透的深色。 */
+.frosted {
+  background: var(--frost); border: 1px solid var(--line);
+  position: relative; isolation: isolate;
+}
+.frosted::before {
+  content: ""; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; z-index: -1; opacity: .07;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+
+/* ---------- 折叠态 ---------- */
+.chip {
+  display: inline-flex; align-items: center; gap: 10px; cursor: pointer;
+  border-radius: 999px; padding: 5px 6px 5px 12px; color: var(--dim); font-size: 13px; white-space: nowrap;
+}
+.chip:hover { border-color: var(--line2); color: var(--text); }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text); box-shadow: 0 0 0 3px rgba(255,255,255,.12); }
+.dot.off { background: var(--mute); box-shadow: none; }
+.chip .ttl { color: var(--text); font-weight: 600; }
+.chip .sep { width: 1px; height: 14px; background: var(--line2); }
+.chip .count { font-variant-numeric: tabular-nums; }
+.chip .cd { font-variant-numeric: tabular-nums; color: var(--text); background: var(--frost2); border-radius: 999px; padding: 1px 9px; }
+.chip .cd.off { color: var(--mute); }
+
+/* ---------- 展开态 ---------- */
+.pop {
+  width: 430px; border-radius: var(--r); padding: 16px 18px 14px;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, .5);
+}
+.pop[hidden] { display: none; }
+.chip, .pop { zoom: .667; }
+.head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; cursor: move; }
+.head h3 { margin: 0; font-size: 17px; font-weight: 500; color: var(--dim); display: flex; align-items: center; gap: 8px; }
+.pill { font-size: 12px; padding: 2px 9px; border-radius: 999px; background: var(--ju-soft); color: var(--ju); }
+.pill.off { background: var(--frost2); color: var(--mute); }
+
+.seg { display: grid; grid-template-columns: 1fr 1fr; background: rgba(0, 0, 0, .35); border: 1px solid var(--line); border-radius: 10px; padding: 3px; gap: 3px; }
+.seg button { all: unset; cursor: pointer; text-align: center; padding: 7px 0 6px; border-radius: 8px; color: var(--dim); }
+.seg button b { display: block; font-size: 15px; font-weight: 600; }
+.seg button small { font-size: 11.5px; color: var(--mute); }
+.seg button.on { background: rgba(255,255,255,.09); color: var(--text); box-shadow: inset 0 0 0 1px var(--line2); }
+.seg button.on small { color: var(--dim); }
+
+.scope { font-size: 11.5px; color: var(--mute); margin: 12px 0 0; display: flex; align-items: center; gap: 8px; }
+.scope::after { content: ""; flex: 1; height: 1px; background: var(--line); }
+.scope b { color: var(--dim); font-weight: 600; }
+
+.row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
+.row.first { border-top: 0; }
+.row .lbl { font-size: 14.5px; }
+.row .sub { font-size: 12px; color: var(--mute); margin-top: 1px; }
+.row .sub.warn { color: var(--ju); }
+
+.sw { all: unset; cursor: pointer; width: 38px; height: 22px; border-radius: 999px; background: rgba(255, 255, 255, .14); position: relative; flex: none; transition: background .15s; }
+.sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text); transition: left .15s; }
+.sw.on { background: var(--ju); }
+.sw.on::after { left: 19px; }
+
+.ctl { display: inline-flex; align-items: center; background: rgba(0, 0, 0, .35); border: 1px solid var(--line); border-radius: 9px; overflow: hidden; height: 30px; }
+.ctl:focus-within { border-color: var(--line2); }
+.ctl button { all: unset; cursor: pointer; width: 30px; height: 30px; text-align: center; line-height: 30px; color: var(--dim); font-size: 16px; }
+.ctl button:hover { background: var(--frost2); color: var(--text); }
+.ctl span { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
+.ctl input { all: unset; width: 62px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); user-select: text; -webkit-user-select: text; cursor: text; }
+
+.meter .top { display: flex; justify-content: space-between; font-size: 13px; color: var(--dim); margin-bottom: 7px; }
+.meter .top b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
+.meter .top b.mute { color: var(--mute); }
+.bar { height: 6px; background: rgba(255, 255, 255, .07); border-radius: 99px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--text); border-radius: 99px; transition: width 1s linear; }
+.pips { display: flex; gap: 4px; margin-top: 8px; }
+.pips i { flex: 1; height: 4px; border-radius: 99px; background: rgba(255, 255, 255, .08); }
+.pips i.done { background: var(--ju); }
+
+.last { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; font-size: 12.5px; color: var(--mute); }
+.last .nums { display: flex; gap: 12px; font-variant-numeric: tabular-nums; }
+.last .nums b { font-weight: 600; color: var(--text); }
+.btn { all: unset; cursor: pointer; background: var(--frost2); border: 1px solid var(--line); padding: 5px 11px; border-radius: 8px; color: var(--text); font-size: 13px; }
+.btn:hover { border-color: var(--line2); }

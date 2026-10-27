@@ -1,0 +1,26 @@
+[package]
+name = "cache-capsule"
+version = "0.1.0"
+description = "CacheCapsule — Claude 桌面端的缓存保活小胶囊"
+authors = ["shawn"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "cache_capsule_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
