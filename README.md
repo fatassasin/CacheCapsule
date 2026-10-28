@@ -43,6 +43,15 @@ Claude 主窗口必须不小于 480×360 逻辑像素（按它自身的 DPI）�
 子类暂摘 `WS_VISIBLE` 后正常传递消息，再恢复该位，禁止绘制但保留焦点和输入；不实际隐藏窗口。
 监视循环会修正 tao 写回的边框样式，避免后续激活、显隐后复发。
 
+## 开机启动
+
+每次运行都会在 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` 写入 `CacheCapsule`（当前 exe 路径），
+于是它出现在「Windows 设置 → 应用 → 启动」和任务管理器的启动列表里，开关就在那里管。
+程序从不改开关状态：Windows 把它记在 `Explorer\StartupApproved\Run`，路径刷新不会覆盖。胶囊和托盘里没有重复的开关。
+
+从 Claude 桌面版的会话里（终端、Claude Code）直接启动的进程处在 MSIX 包的注册表虚拟化里，写进 HKCU 的值只进包的私有副本，
+系统设置看不到。要登记成功，至少有一次从资源管理器、开始菜单或 `explorer.exe <exe 路径>` 启动。
+
 ## 构建
 
 Rust 在 `~/.cargo/bin`，Git Bash 的 PATH 里没有它。

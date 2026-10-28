@@ -25,7 +25,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State, WebviewWindow};
 
@@ -257,25 +257,17 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
     }
 }
 
-fn reg(args: &[&str]) -> bool {
-    Command::new("reg")
-        .args(args)
+/// 登记进「设置 → 应用 → 启动」。开关由 Windows 自己记在 `StartupApproved\Run`，
+/// 这里只写 Run 项（每次启动刷新 exe 路径，程序挪了位置也跟得上），从不碰开关状态。
+fn register_startup() {
+    let Ok(exe) = std::env::current_exe() else { return };
+    let ok = Command::new("reg")
+        .args(["add", RUN_KEY, "/v", "CacheCapsule", "/t", "REG_SZ", "/d", &format!("\"{}\"", exe.display()), "/f"])
         .creation_flags(CREATE_NO_WINDOW)
         .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-fn autostart_on() -> bool {
-    reg(&["query", RUN_KEY, "/v", "CacheCapsule"])
-}
-
-fn set_autostart(on: bool) {
-    if on {
-        let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-        reg(&["add", RUN_KEY, "/v", "CacheCapsule", "/t", "REG_SZ", "/d", &format!("\"{exe}\""), "/f"]);
-    } else {
-        reg(&["delete", RUN_KEY, "/v", "CacheCapsule", "/f"]);
+        .is_ok_and(|s| s.success());
+    if !ok {
+        trace("startup registration failed");
     }
 }
 
@@ -291,17 +283,17 @@ pub fn run() {
             let hwnd = hwnd_of(&window).ok_or("拿不到窗口句柄")?;
             win::prepare(hwnd)?;
 
-            let auto = CheckMenuItem::with_id(app, "autostart", "开机启动", true, autostart_on(), None::<&str>)?;
+            std::thread::spawn(register_startup);
+
             let quit = MenuItem::with_id(app, "quit", "退出 CacheCapsule", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&auto, &quit])?;
-            let auto_item = auto.clone();
+            let menu = Menu::with_items(app, &[&quit])?;
             let mut tray = TrayIconBuilder::new()
                 .tooltip("CacheCapsule")
                 .menu(&menu)
-                .on_menu_event(move |app, event| match event.id().as_ref() {
-                    "quit" => app.exit(0),
-                    "autostart" => set_autostart(auto_item.is_checked().unwrap_or(false)),
-                    _ => {}
+                .on_menu_event(|app, event| {
+                    if event.id().as_ref() == "quit" {
+                        app.exit(0);
+                    }
                 });
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
