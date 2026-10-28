@@ -1,0 +1,6 @@
+{
+  "name": "cache-keepalive",
+  "version": "0.1.0",
+  "description": "Switch the prompt cache TTL between 5m and 1h and keep the cache warm while idle",
+  "types": "./types/index.d.ts"
+}

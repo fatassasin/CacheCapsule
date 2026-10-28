@@ -96,3 +96,4 @@ body {
 .last .nums b { font-weight: 600; color: var(--text); }
 .btn { all: unset; cursor: pointer; background: var(--frost2); border: 1px solid var(--line); padding: 5px 11px; border-radius: 8px; color: var(--text); font-size: 13px; }
 .btn:hover { border-color: var(--line2); }
+.sw:disabled, .seg button:disabled, .btn:disabled { opacity: .4; cursor: default; pointer-events: none; }

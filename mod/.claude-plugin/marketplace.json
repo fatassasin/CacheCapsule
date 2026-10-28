@@ -1,0 +1,5 @@
+{
+  "name": "cachecapsule",
+  "owner": { "name": "Shawn" },
+  "plugins": [{ "name": "cache-keepalive", "source": "./" }]
+}

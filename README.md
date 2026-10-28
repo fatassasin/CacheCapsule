@@ -11,14 +11,35 @@ Claude 桌面端（Windows）的缓存保活小胶囊。独立的 Tauri 程序�
 
 | | 做什么 |
 | --- | --- |
-| `cache-keepalive` mod（`~/.claude/dev-mods/…/cache-keepalive`） | 切 5m / 1h 写入 TTL；到点 `$.model.fork` 发一条最短的读缓存请求；窗口关闭、缓存过期、次数用完就停 |
+| `cache-keepalive` mod（`mod/`） | 切 5m / 1h 写入 TTL；到点 `$.model.fork` 发一条最短的读缓存请求；窗口关闭、缓存过期、次数用完就停 |
 | CacheCapsule（本目录） | 显示状态、改设置、「立即保活」；按各屏 Claude 主窗口的遮挡情况决定显隐 |
 
 两边只通过 `%USERPROFILE%\.claude\cache-keepalive\` 里的文件说话：
 
-- `settings.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce, tiers:{'5m':{iv,max},'1h':{iv,max}}}`。`pingNonce` 加一即「立即保活」。
-- `state/<会话>.json`：mod 写、胶囊读。含 `ttl sent nextAt warmAt status note last activeAt beat ended`。`beat` 是心跳，20 秒没更新就当会话没了；多个会话同时开着，胶囊显示 `activeAt` 最近的那个。
+- `settings.json`：胶囊写、mod 每秒读。`{tiers:{'5m':{iv,max},'1h':{iv,max}}}`，各档的间隔和次数，所有聊天共用。
+- `chats/<会话>.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce}`，每个聊天自己一份；没有文件就是关，只有在这个聊天里打开过开关才会写。`pingNonce` 加一即「立即保活」。
+- `state/<会话>.json`：mod 写、胶囊读。含 `sid ttl sent nextAt warmAt status note last activeAt beat ended`。`beat` 是心跳，20 秒没更新就当会话没了。
 - `capsule.json`：胶囊自己的，`{offR, offB}`。
+
+`<会话>` 是 Claude Code 的会话 id。胶囊只显示桌面版眼下打开的那个聊天：桌面版切聊天时会改
+`%LOCALAPPDATA%\Claude-3p\claude-code-sessions\<账号>\<组织>\local_*.json` 里的 `lastFocusedAt`，取最大的那条未归档记录的 `cliSessionId`。
+开关、档位、状态标签、倒计时、已保活次数和上次用量都跟着它换；那个聊天还没起会话时显示「未打开对话」，开关不能点。
+找不到这些记录（比如不是桌面版）时退回显示最近有动静的会话。
+
+### 安装 mod
+
+`mod/` 自带一个本地插件市场，装到用户级后每个聊天都会加载：
+
+```bash
+claude plugin marketplace add "<本目录>\mod"
+claude plugin install cache-keepalive@cachecapsule --scope user
+```
+
+装好后已经开着的聊天要 `/reload-plugins` 或重开才会加载。改了 `mod/` 之后用 `claude plugin update cache-keepalive@cachecapsule` 更新缓存里的副本。
+用 CC Switch 管 `~/.claude/settings.json` 的话，它切换配置时会用自己库里的副本覆盖，`enabledPlugins` 和 `extraKnownMarketplaces` 也要写进 CC Switch 当前供应商的配置里。
+开关打开、但胶囊显示「本对话未接入保活」，就是这个聊天里 mod 没加载。
+
+测试：`cd mod && CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .`
 
 ## 显隐规则
 
@@ -69,6 +90,7 @@ cargo tauri build                          # NSIS 安装包
 ## 已知限制
 
 - 透明窗口里没有桌面可模糊，磨砂只剩颗粒和略透的深色，做不出定稿稿里的真实背景模糊。
-- 胶囊只认「最近有动静」的会话，同时跑多个会话时看不到其余的。
+- 「眼下打开的聊天」靠桌面版私有的会话记录格式（`lastFocusedAt`、`cliSessionId`），桌面版改了格式就会退回按最近动静挑。
+- 分屏同时看两个聊天时，只跟最后点过的那个。
 - 显隐按窗口的矩形边界判断，不逐像素解析应用内容；普通应用透明内容/不规则窗口可能按完整矩形算遮挡。
 - 只支持 Windows。

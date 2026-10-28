@@ -7,10 +7,14 @@
 //! 2. Claude 主窗口在任一屏幕上还有部分露出就显示，并跟着它的窗口走。
 //!
 //! 约定的目录是 `%USERPROFILE%\.claude\cache-keepalive\`：
-//! - `settings.json`    胶囊写、mod 读：档位、开关、各档的间隔和次数、立即保活的计数；
+//! - `settings.json`    胶囊写、mod 读：各档的间隔和次数，所有聊天共用；
+//! - `chats/<会话>.json` 胶囊写、mod 读：这个聊天自己的开关、档位、立即保活的计数，没有文件就是关；
 //! - `state/<会话>.json` mod 写、胶囊读：这个会话的保活进度和上一次的用量；
 //! - `capsule.json`     胶囊自己的，记着相对 Claude 窗口的位置。
+//!
+//! 胶囊只显示桌面版眼下打开的那个聊天（见 `focus`）。
 
+mod focus;
 mod win;
 mod visibility;
 
@@ -118,7 +122,8 @@ fn hwnd_of(window: &WebviewWindow) -> Option<isize> {
     window.hwnd().ok().map(|h| h.0 as isize)
 }
 
-/// 设置 + 全部会话的状态。挑哪个会话、过期不过期都交给前端——判定只放一处。
+/// 设置 + 各聊天的开关 + 全部会话的状态 + 眼下是哪个聊天。过期不过期交给前端——判定只放一处。
+/// `focusKnown` 为假表示认不出是哪个聊天（找不到桌面版的记录），前端退回按最近动静挑。
 #[tauri::command]
 fn snapshot() -> Value {
     let dir = data_dir();
@@ -133,11 +138,36 @@ fn snapshot() -> Value {
             }
         }
     }
+    let mut chats = serde_json::Map::new();
+    if let Ok(entries) = fs::read_dir(dir.join("chats")) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("").to_owned();
+            if path.extension().and_then(|e| e.to_str()) == Some("json") && focus::is_session_id(&sid) {
+                if let Some(v) = read_json(&path) {
+                    chats.insert(sid, v);
+                }
+            }
+        }
+    }
+    let focus = focus::current();
     json!({
         "settings": read_json(&dir.join("settings.json")),
+        "focusKnown": focus.is_some(),
+        "focus": focus.flatten(),
+        "chats": chats,
         "states": states,
         "now": now_ms(),
     })
+}
+
+#[tauri::command]
+fn save_chat(sid: String, text: String) -> Result<(), String> {
+    if !focus::is_session_id(&sid) {
+        return Err("会话 id 不对".into());
+    }
+    serde_json::from_str::<Value>(&text).map_err(|e| e.to_string())?;
+    write_atomic(&data_dir().join("chats").join(format!("{sid}.json")), &text).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -277,7 +307,7 @@ pub fn run() {
     }
     tauri::Builder::default()
         .manage(Shared::load())
-        .invoke_handler(tauri::generate_handler![snapshot, save_settings, fit, begin_drag])
+        .invoke_handler(tauri::generate_handler![snapshot, save_settings, save_chat, fit, begin_drag])
         .setup(|app| {
             let window = app.get_webview_window("main").ok_or("没有主窗口")?;
             let hwnd = hwnd_of(&window).ok_or("拿不到窗口句柄")?;
