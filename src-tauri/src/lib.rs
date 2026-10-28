@@ -13,24 +13,27 @@
 
 mod win;
 mod visibility;
-mod startup;
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use tauri::menu::{Menu, MenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State, WebviewWindow};
 
 /// 第一次出现时离 Claude 窗口右、下边的距离（逻辑像素），大致落在输入框上方。
 const DEFAULT_OFF_R: f64 = 40.0;
 const DEFAULT_OFF_B: f64 = 130.0;
+const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 胶囊窗口右、下边相对 Claude 窗口右、下边的距离，逻辑像素（换显示器缩放也不变）。
 struct Anchor {
@@ -254,6 +257,28 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
     }
 }
 
+fn reg(args: &[&str]) -> bool {
+    Command::new("reg")
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
+}
+
+fn autostart_on() -> bool {
+    reg(&["query", RUN_KEY, "/v", "CacheCapsule"])
+}
+
+fn set_autostart(on: bool) {
+    if on {
+        let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+        reg(&["add", RUN_KEY, "/v", "CacheCapsule", "/t", "REG_SZ", "/d", &format!("\"{exe}\""), "/f"]);
+    } else {
+        reg(&["delete", RUN_KEY, "/v", "CacheCapsule", "/f"]);
+    }
+}
+
 pub fn run() {
     if !win::claim_single_instance() {
         return;
@@ -265,25 +290,23 @@ pub fn run() {
             let window = app.get_webview_window("main").ok_or("没有主窗口")?;
             let hwnd = hwnd_of(&window).ok_or("拿不到窗口句柄")?;
             win::prepare(hwnd)?;
-            if let Err(e) = startup::ensure_registered() { trace(&e); }
 
+            let auto = CheckMenuItem::with_id(app, "autostart", "开机启动", true, autostart_on(), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 CacheCapsule", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&quit])?;
+            let menu = Menu::with_items(app, &[&auto, &quit])?;
+            let auto_item = auto.clone();
             let mut tray = TrayIconBuilder::new()
                 .tooltip("CacheCapsule")
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
+                    "autostart" => set_autostart(auto_item.is_checked().unwrap_or(false)),
                     _ => {}
                 });
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
-            // 便携 exe 也有开始菜单入口；只更新本应用的快捷方式，不自动开启自启。
-            std::thread::spawn(|| {
-                if let Err(e) = startup::ensure_shortcut() { trace(&e); }
-            });
 
             let handle = app.handle().clone();
             std::thread::spawn(move || watch(handle, hwnd));
