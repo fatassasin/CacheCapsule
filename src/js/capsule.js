@@ -14,7 +14,7 @@
   const STATUS = {
     live: '保活中', busy: '对话中', done: '已用完', off: '已关闭', closed: '窗口已关闭',
     empty: '等待首条回复', expired: '缓存已过期', error: '出错',
-    nochat: '未打开对话', nomod: '本对话未接入保活',
+    nochat: '未打开对话', nomod: '未加载 · 在本对话运行 /reload-plugins',
   };
 
   const fmt = s => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, '0')}`;

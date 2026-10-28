@@ -37,7 +37,7 @@ claude plugin install cache-keepalive@cachecapsule --scope user
 
 装好后已经开着的聊天要 `/reload-plugins` 或重开才会加载。改了 `mod/` 之后用 `claude plugin update cache-keepalive@cachecapsule` 更新缓存里的副本。
 用 CC Switch 管 `~/.claude/settings.json` 的话，它切换配置时会用自己库里的副本覆盖，`enabledPlugins` 和 `extraKnownMarketplaces` 也要写进 CC Switch 当前供应商的配置里。
-开关打开、但胶囊显示「本对话未接入保活」，就是这个聊天里 mod 没加载。
+开关打开、但胶囊显示「未加载 · 在本对话运行 /reload-plugins」，就是这个聊天在装 mod 之前就开着，还没加载它。
 
 测试：`cd mod && CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .`
 
