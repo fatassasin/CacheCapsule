@@ -24,7 +24,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde_json::{json, Value};
-use tauri::menu::{CheckMenuItem, Menu, MenuItem};
+use tauri::menu::{Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
 use tauri::{Manager, State, WebviewWindow};
 
@@ -254,55 +254,26 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
     }
 }
 
-struct StartupMenu {
-    item: CheckMenuItem<tauri::Wry>,
-}
-
-/// 两个入口共用同一处写入，失败也按注册表真实状态恢复托盘勾选。
-#[tauri::command]
-fn set_autostart(app: tauri::AppHandle, on: bool) -> Result<bool, String> {
-    let menu = app.state::<StartupMenu>();
-    let result = startup::set(on);
-    let actual = startup::enabled();
-    menu.item.set_checked(actual).map_err(|e| e.to_string())?;
-    result
-}
-
-#[tauri::command]
-fn get_autostart(app: tauri::AppHandle) -> bool {
-    let menu = app.state::<StartupMenu>();
-    let actual = startup::enabled();
-    let _ = menu.item.set_checked(actual);
-    actual
-}
-
 pub fn run() {
     if !win::claim_single_instance() {
         return;
     }
     tauri::Builder::default()
         .manage(Shared::load())
-        .invoke_handler(tauri::generate_handler![snapshot, save_settings, fit, begin_drag, get_autostart, set_autostart])
+        .invoke_handler(tauri::generate_handler![snapshot, save_settings, fit, begin_drag])
         .setup(|app| {
             let window = app.get_webview_window("main").ok_or("没有主窗口")?;
             let hwnd = hwnd_of(&window).ok_or("拿不到窗口句柄")?;
             win::prepare(hwnd)?;
+            if let Err(e) = startup::ensure_registered() { trace(&e); }
 
-            let auto = CheckMenuItem::with_id(app, "autostart", "开机启动", true, startup::enabled(), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 CacheCapsule", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&auto, &quit])?;
-            app.manage(StartupMenu { item: auto.clone() });
-            let auto_item = auto.clone();
+            let menu = Menu::with_items(app, &[&quit])?;
             let mut tray = TrayIconBuilder::new()
                 .tooltip("CacheCapsule")
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
-                    "autostart" => {
-                        if let Err(e) = set_autostart(app.clone(), auto_item.is_checked().unwrap_or(false)) {
-                            trace(&e);
-                        }
-                    },
                     _ => {}
                 });
             if let Some(icon) = app.default_window_icon() {
