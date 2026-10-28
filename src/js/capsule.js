@@ -44,6 +44,8 @@
   let holdUntil = 0;     // 刚改过设置，这段时间内不让旧快照盖回去
   let open = false;
   let misses = 0;
+  let autostart = null, startupBusy = false, startupReading = false;
+  let startupVersion = 0, startupError = '';
 
   // 多个会话同时开着时，挑最近有动静的那个；心跳断了的不算。
   function pick(states, at) {
@@ -76,6 +78,11 @@
     $('s5').textContent = `写入 1.25× · 每 ${fmt(settings.tiers['5m'].iv)}`;
     $('s1').textContent = `写入 2× · 每 ${fmt(settings.tiers['1h'].iv)}`;
     $('sw').classList.toggle('on', settings.isOn);
+    $('autostart').classList.toggle('on', autostart === true);
+    $('autostart').setAttribute('aria-checked', String(autostart === true));
+    $('autostart').disabled = startupBusy || autostart === null;
+    $('autostartHint').textContent = startupError || (startupBusy ? '正在更新启动项…' : autostart === null ? '正在读取启动项…' : '登录 Windows 后自动运行胶囊');
+    $('autostartHint').classList.toggle('warn', !!startupError);
     $('scopeName').textContent = ttl === '5m' ? '5 分钟档' : '1 小时档';
     if (document.activeElement !== $('iv')) $('iv').value = fmt(t.iv);
     const margin = ttl === '5m' ? '30 秒' : '5 分钟';
@@ -107,6 +114,20 @@
   }
 
   // ---------- 读写 ----------
+  async function refreshStartup() {
+    if (startupBusy || startupReading) return;
+    startupReading = true;
+    const version = startupVersion;
+    try {
+      const actual = await invoke('get_autostart');
+      if (version === startupVersion) autostart = actual;
+    } catch (e) {
+      if (version === startupVersion) startupError = `读取启动项失败：${e}`;
+    } finally {
+      startupReading = false;
+    }
+  }
+
   async function refresh() {
     try {
       const snap = await invoke('snapshot');
@@ -116,6 +137,7 @@
       // mod 正在改写文件时可能读到半截，一帧读不到不算它没了。
       if (next || ++misses >= 2) { run = next; misses = 0; }
     } catch (_) { /* 读不到就沿用上一帧 */ }
+    if (open || autostart === null) await refreshStartup();
     draw();
   }
 
@@ -133,6 +155,22 @@
     if (b) save(s => { s.ttl = b.dataset.ttl; return s; });
   };
   $('sw').onclick = () => save(s => { s.isOn = !s.isOn; return s; });
+  $('autostart').onclick = async () => {
+    if (startupBusy || autostart === null) return;
+    startupBusy = true;
+    startupVersion++;
+    startupError = '';
+    draw();
+    try {
+      autostart = await invoke('set_autostart', { on: !autostart });
+    } catch (e) {
+      startupError = `更新启动项失败：${e}`;
+      try { autostart = await invoke('get_autostart'); } catch (_) { /* 保留上次确认的状态 */ }
+    } finally {
+      startupBusy = false;
+      draw();
+    }
+  };
   $('minus').onclick = () => tierOf(settings.ttl, t => ({ ...t, max: t.max - 1 }));
   $('plus').onclick = () => tierOf(settings.ttl, t => ({ ...t, max: t.max + 1 }));
   $('ivMinus').onclick = () => tierOf(settings.ttl, t => ({ ...t, iv: t.iv - STEP[settings.ttl] }));
@@ -167,6 +205,7 @@
   $('chip').addEventListener('click', () => {
     if (dragged) { dragged = false; return; }
     open = !open;
+    if (open) refreshStartup().then(draw);
     draw();
   });
   // 点到胶囊和面板以外（包括点回 Claude 窗口）就收起。
@@ -190,8 +229,10 @@
 
   // ---------- 浏览器里预览用的假后端 ----------
   function demoBackend() {
-    const mem = { settings: null, nonce: 0, sent: 2, nextAt: Date.now() + 8000, last: null };
+    const mem = { settings: null, autostart: false, nonce: 0, sent: 2, nextAt: Date.now() + 8000, last: null };
     return async (cmd, args) => {
+      if (cmd === 'get_autostart') return mem.autostart;
+      if (cmd === 'set_autostart') return (mem.autostart = args.on);
       if (cmd === 'save_settings') {
         mem.settings = JSON.parse(args.text);
         if (mem.settings.pingNonce !== mem.nonce) {

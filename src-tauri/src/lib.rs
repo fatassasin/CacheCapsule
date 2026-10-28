@@ -13,13 +13,12 @@
 
 mod win;
 mod visibility;
+mod startup;
 
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -32,8 +31,6 @@ use tauri::{Manager, State, WebviewWindow};
 /// 第一次出现时离 Claude 窗口右、下边的距离（逻辑像素），大致落在输入框上方。
 const DEFAULT_OFF_R: f64 = 40.0;
 const DEFAULT_OFF_B: f64 = 130.0;
-const RUN_KEY: &str = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Run";
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// 胶囊窗口右、下边相对 Claude 窗口右、下边的距离，逻辑像素（换显示器缩放也不变）。
 struct Anchor {
@@ -257,26 +254,26 @@ fn watch(handle: tauri::AppHandle, hwnd: isize) {
     }
 }
 
-fn reg(args: &[&str]) -> bool {
-    Command::new("reg")
-        .args(args)
-        .creation_flags(CREATE_NO_WINDOW)
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
+struct StartupMenu {
+    item: CheckMenuItem<tauri::Wry>,
 }
 
-fn autostart_on() -> bool {
-    reg(&["query", RUN_KEY, "/v", "CacheCapsule"])
+/// 两个入口共用同一处写入，失败也按注册表真实状态恢复托盘勾选。
+#[tauri::command]
+fn set_autostart(app: tauri::AppHandle, on: bool) -> Result<bool, String> {
+    let menu = app.state::<StartupMenu>();
+    let result = startup::set(on);
+    let actual = startup::enabled();
+    menu.item.set_checked(actual).map_err(|e| e.to_string())?;
+    result
 }
 
-fn set_autostart(on: bool) {
-    if on {
-        let exe = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
-        reg(&["add", RUN_KEY, "/v", "CacheCapsule", "/t", "REG_SZ", "/d", &format!("\"{exe}\""), "/f"]);
-    } else {
-        reg(&["delete", RUN_KEY, "/v", "CacheCapsule", "/f"]);
-    }
+#[tauri::command]
+fn get_autostart(app: tauri::AppHandle) -> bool {
+    let menu = app.state::<StartupMenu>();
+    let actual = startup::enabled();
+    let _ = menu.item.set_checked(actual);
+    actual
 }
 
 pub fn run() {
@@ -285,28 +282,37 @@ pub fn run() {
     }
     tauri::Builder::default()
         .manage(Shared::load())
-        .invoke_handler(tauri::generate_handler![snapshot, save_settings, fit, begin_drag])
+        .invoke_handler(tauri::generate_handler![snapshot, save_settings, fit, begin_drag, get_autostart, set_autostart])
         .setup(|app| {
             let window = app.get_webview_window("main").ok_or("没有主窗口")?;
             let hwnd = hwnd_of(&window).ok_or("拿不到窗口句柄")?;
             win::prepare(hwnd)?;
 
-            let auto = CheckMenuItem::with_id(app, "autostart", "开机启动", true, autostart_on(), None::<&str>)?;
+            let auto = CheckMenuItem::with_id(app, "autostart", "开机启动", true, startup::enabled(), None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "退出 CacheCapsule", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&auto, &quit])?;
+            app.manage(StartupMenu { item: auto.clone() });
             let auto_item = auto.clone();
             let mut tray = TrayIconBuilder::new()
                 .tooltip("CacheCapsule")
                 .menu(&menu)
                 .on_menu_event(move |app, event| match event.id().as_ref() {
                     "quit" => app.exit(0),
-                    "autostart" => set_autostart(auto_item.is_checked().unwrap_or(false)),
+                    "autostart" => {
+                        if let Err(e) = set_autostart(app.clone(), auto_item.is_checked().unwrap_or(false)) {
+                            trace(&e);
+                        }
+                    },
                     _ => {}
                 });
             if let Some(icon) = app.default_window_icon() {
                 tray = tray.icon(icon.clone());
             }
             tray.build(app)?;
+            // 便携 exe 也有开始菜单入口；只更新本应用的快捷方式，不自动开启自启。
+            std::thread::spawn(|| {
+                if let Err(e) = startup::ensure_shortcut() { trace(&e); }
+            });
 
             let handle = app.handle().clone();
             std::thread::spawn(move || watch(handle, hwnd));
