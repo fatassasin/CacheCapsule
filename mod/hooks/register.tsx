@@ -11,6 +11,9 @@ const CLOSED_RECHECK_MS = 20_000
 // The capsule treats a session as gone when its file has not been touched for
 // longer than it waits; this keeps the file fresh while nothing else changes.
 const BEAT_MS = 5_000
+// Tools that sit waiting on the person: the turn is still open, but no
+// request goes out until they answer, so the cache ages as it does between turns.
+const WAITS_ON_PERSON = ['AskUserQuestion', 'ExitPlanMode'] as const
 
 const DEFAULT_TIERS: Tiers = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } }
 // A chat the capsule has never switched on keeps nothing alive.
@@ -87,6 +90,9 @@ let lastBeat = 0
 let seenNonce: number | undefined
 let loadedPrefs = ''
 let hasSettings = false
+// When this turn's last answered main-thread request went out. The cache's
+// TTL runs from the request, not from when its reply finished streaming.
+let stepAt: number | undefined
 
 /**
  * Where the capsule and this mod meet: `settings.json` and `chats/<session>.json`
@@ -129,6 +135,7 @@ async function ping($: EngineInterface) {
   if (isPinging || isBusy) return
   isPinging = true
   try {
+    const sentAt = await $.clock.now()
     const res = await $.model.fork({ prompt: FORK_PROMPT })
     const t = await $.clock.now()
     const p = await read($, prefs)
@@ -153,8 +160,8 @@ async function ping($: EngineInterface) {
     await update($, run, (r): Run => ({
       ...r,
       sent: r.sent + 1,
-      nextAt: isHit ? t + p.tiers[r.ttl].iv * 1000 : null,
-      warmAt: isHit ? t : r.warmAt,
+      nextAt: isHit ? sentAt + p.tiers[r.ttl].iv * 1000 : null,
+      warmAt: isHit ? sentAt : r.warmAt,
       status: isHit ? 'live' : 'error',
       note: isHit ? '' : '没有命中缓存',
     }))
@@ -162,6 +169,19 @@ async function ping($: EngineInterface) {
     isPinging = false
     await writeState($, await $.clock.now())
   }
+}
+
+/** A request just wrote the cache: count down from when it went out. */
+async function startRun($: EngineInterface, warmAt: number) {
+  const p = await read($, prefs)
+  await update($, run, (): Run => ({
+    ttl: p.ttl,
+    sent: 0,
+    nextAt: warmAt + p.tiers[p.ttl].iv * 1000,
+    warmAt,
+    status: 'live',
+    note: '',
+  }))
 }
 
 async function loadPrefs($: EngineInterface) {
@@ -246,6 +266,7 @@ export const register: Register = on => {
   on('turn.start', async ($, e, next) => {
     if (e.agentId === undefined && !isPinging) {
       isBusy = true
+      stepAt = undefined
       activeAt = await $.clock.now()
       await update($, run, (r): Run => ({ ...r, status: 'busy' }))
       await writeState($, activeAt)
@@ -254,25 +275,43 @@ export const register: Register = on => {
     return next(e)
   })
 
+  on('turn.step', async function* ($, e, next) {
+    const t = await $.clock.now()
+    const res = yield* next(e)
+    if (e.agentId === undefined && res.usage) stepAt = t
+    return res
+  })
+
+  // A question or a plan to approve holds the turn open with nothing in flight:
+  // keep the cache alive as between turns until the person answers.
+  on('tool.call', { tool: WAITS_ON_PERSON }, async ($, e, next) => {
+    if (e.agentId !== undefined) return next(e)
+    const t = await $.clock.now()
+    isBusy = false
+    activeAt = t
+    await startRun($, stepAt ?? t)
+    await writeState($, t)
+    try {
+      return await next(e)
+    } finally {
+      isBusy = true
+      activeAt = await $.clock.now()
+      await update($, run, (r): Run => ({ ...r, status: 'busy' }))
+      await writeState($, activeAt)
+    }
+  })
+
   // A real request just wrote the cache: the run starts over from here.
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined && !isPinging) {
       isBusy = false
       const t = await $.clock.now()
       activeAt = t
-      const p = await read($, prefs)
       // No usage: no request got through, so nothing is known to be cached.
       if (!e.usage) {
         await update($, run, (r): Run => ({ ...r, nextAt: null, status: 'error', note: '本轮没有写入缓存' }))
       } else {
-        await update($, run, (): Run => ({
-          ttl: p.ttl,
-          sent: 0,
-          nextAt: t + p.tiers[p.ttl].iv * 1000,
-          warmAt: t,
-          status: 'live',
-          note: '',
-        }))
+        await startRun($, stepAt ?? t)
       }
       await writeState($, t)
     }

@@ -202,3 +202,92 @@ test('a session that ends marks its state file', async ($, on) => {
   await $.session.end({ reason: 'other', sessionId: 'sess-1', resume: { id: 'sess-1' } })
   expect(state(disk)).toMatchObject({ ended: true })
 })
+
+/** The model's reply to one request, as the engine would hand it back. */
+function steps(on: On) {
+  on('turn.step', async function* (_, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'tool_use' as const, usage: { ...USAGE, model: 'x' } }
+  })
+}
+const step = async ($: any, index = 0) => {
+  for await (const _ of $.turn.step({ turnId: 't1', index, model: 'x', messageCount: 1 })) {
+    // The chunks are not what the mod reads.
+  }
+}
+const QUESTION = {
+  tool: 'AskUserQuestion' as const,
+  questions: [{ question: 'Which?', header: 'Pick', multiSelect: false, options: [{ label: 'a', description: '' }, { label: 'b', description: '' }] }],
+}
+
+test('the first ping counts from when the request went out, not from when its reply finished', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  disk.set(CHAT, chat('5m', true))
+  const forks = { n: 0 }
+  common(on, forks)
+  steps(on)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await step($)
+  // A long reply: two minutes pass before the turn completes.
+  await clock.advance(120_000)
+  await complete($)
+  await clock.advance(148_000)
+  expect(forks.n).toBe(0)
+  await clock.advance(3_000)
+  expect(forks.n).toBe(1)
+})
+
+test('a question waiting on the person keeps the cache alive until they answer', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  disk.set(CHAT, chat('5m', true))
+  const forks = { n: 0 }
+  common(on, forks)
+  steps(on)
+  let answer = () => {}
+  on('tool.call', () => new Promise(resolve => { answer = () => resolve({ result: { answers: {} } } as any) }))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await step($)
+  await clock.advance(60_000)
+  const asked = $.tool.call(QUESTION)
+  await clock.advance(1_000)
+  expect(state(disk)).toMatchObject({ status: 'live', sent: 0 })
+  // Counted from the request that asked, 61s ago.
+  await clock.advance(207_000)
+  expect(forks.n).toBe(0)
+  await clock.advance(3_000)
+  expect(forks.n).toBe(1)
+  await clock.advance(270_000)
+  expect(forks.n).toBe(2)
+
+  answer()
+  await asked
+  expect(state(disk)).toMatchObject({ status: 'busy' })
+  await clock.advance(600_000)
+  expect(forks.n).toBe(2)
+})
+
+test("a subagent's question leaves the main turn busy", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  disk.set(CHAT, chat('5m', true))
+  const forks = { n: 0 }
+  common(on, forks)
+  steps(on)
+  on('tool.call', () => new Promise(() => {}))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await step($)
+  void $.tool.call({ ...QUESTION, agentId: 'sub' })
+  await clock.advance(600_000)
+  expect(forks.n).toBe(0)
+  expect(state(disk)).toMatchObject({ status: 'busy' })
+})

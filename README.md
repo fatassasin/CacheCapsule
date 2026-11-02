@@ -14,6 +14,9 @@ Claude 桌面端（Windows）的缓存保活小胶囊。独立的 Tauri 程序�
 | `cache-keepalive` mod（`mod/`） | 切 5m / 1h 写入 TTL；到点 `$.model.fork` 发一条最短的读缓存请求；窗口关闭、缓存过期、次数用完就停 |
 | CacheCapsule（本目录） | 显示状态、改设置、「立即保活」；按各屏 Claude 主窗口的遮挡情况决定显隐 |
 
+倒计时从写缓存的那次请求发出时算起（TTL 从请求开始计，不是从回复写完计）。一轮对话结束后开始保活；
+轮次没结束、但停在 `AskUserQuestion` 提问或 `ExitPlanMode` 等批准上时，也照样保活，人一回答就回到「对话中」。
+
 两边只通过 `%USERPROFILE%\.claude\cache-keepalive\` 里的文件说话：
 
 - `settings.json`：胶囊写、mod 每秒读。`{tiers:{'5m':{iv,max},'1h':{iv,max}}}`，各档的间隔和次数，所有聊天共用。
