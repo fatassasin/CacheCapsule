@@ -49,6 +49,7 @@
   let now = Date.now();
   let holdTiers = 0;     // 刚改过设置，这段时间内不让旧快照盖回去
   let holdChat = { sid: null, until: 0 };
+  let chatSeen = null;   // 读到过开关文件的聊天
   let open = false;
   let misses = 0;
   // 点了 ⏹/▶ 之后先按点的结果显示，等 mod 把状态改掉（或超时）再听它的。
@@ -112,7 +113,7 @@
     $('pill').textContent = label;
     $('pill').classList.toggle('off', !ok);
 
-    $('cdot').classList.toggle('off', !ok);
+    $('cdot').classList.toggle('on', !!sid && chat.isOn);
     $('cttl').textContent = pending ? `${run.ttl} → ${ttl}` : ttl;
     $('ccount').textContent = `保活 ${sent}/${rt.max}`;
     const short = { stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重载' };
@@ -138,7 +139,11 @@
       if (Date.now() >= holdTiers) settings = mergeTiers(snap.settings);
       const nextSid = snap.focusKnown ? snap.focus || null : (latest(states, now) || {}).sid || null;
       if (nextSid !== sid) { sid = nextSid; run = null; misses = 0; }
-      if (!(holdChat.sid === sid && Date.now() < holdChat.until)) chat = mergeChat(sid && (snap.chats || {})[sid]);
+      // 胶囊从不删聊天文件：读到过又忽然不见，是正好赶上改写，沿用上一帧，免得一闪成关、再被一次点击存成关。
+      const saved = sid ? (snap.chats || {})[sid] : undefined;
+      if (saved) chatSeen = sid;
+      const isHeld = holdChat.sid === sid && Date.now() < holdChat.until;
+      if (!isHeld && (saved || chatSeen !== sid)) chat = mergeChat(saved);
       const next = sid ? states.find(s => s.sid === sid && isFresh(s, now)) || null : null;
       // mod 正在改写文件时可能读到半截，一帧读不到不算它没了。
       if (next || ++misses >= 2) { run = next; misses = 0; }
@@ -163,6 +168,11 @@
   const tierOf = (ttl, fn) => save(s => { s.tiers[ttl] = fn(s.tiers[ttl]); return s; });
 
   // ---------- 交互 ----------
+  // 点过胶囊后键盘焦点会留在按钮上，回头按的空格、回车会被当成再点一次，悄悄拨动开关。
+  // 只认鼠标点的（键盘触发的 click 里 detail 是 0）。
+  document.addEventListener('click', e => {
+    if (e.detail === 0 && e.target.closest('button')) { e.preventDefault(); e.stopImmediatePropagation(); }
+  }, true);
   $('seg').onclick = e => {
     const b = e.target.closest('button');
     if (b) saveChat(c => { c.ttl = b.dataset.ttl; return c; });

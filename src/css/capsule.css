@@ -33,8 +33,9 @@ body {
   border-radius: 999px; padding: 5px 6px 5px 12px; color: var(--dim); font-size: 13px; white-space: nowrap;
 }
 .chip:hover { border-color: var(--line2); color: var(--text); }
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text); box-shadow: 0 0 0 3px rgba(255,255,255,.12); }
-.dot.off { background: var(--mute); box-shadow: none; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--mute); }
+/* 这个聊天的保活开关开着就是橙色，和倒计时走不走无关。 */
+.dot.on { background: var(--ju); box-shadow: 0 0 0 3px var(--ju-soft); }
 .chip .ttl { color: var(--text); font-weight: 600; }
 .chip .sep { width: 1px; height: 14px; background: var(--line2); }
 .chip .count { font-variant-numeric: tabular-nums; }
