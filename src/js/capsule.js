@@ -13,8 +13,9 @@
   const DEFAULT_TIERS = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } };
   const STATUS = {
     live: '保活中', busy: '对话中', done: '已用完', off: '已关闭', closed: '窗口已关闭',
-    empty: '等待首条回复', expired: '缓存已过期', error: '出错', paused: '已暂停 · 下次对话恢复',
+    empty: '等待首条回复', expired: '缓存已过期', error: '出错', stopped: '已停止 · 下条消息后恢复', resuming: '恢复中',
     nochat: '未打开对话', nomod: '未加载 · 在本对话运行 /reload-plugins',
+    oldmod: '停止需先在本对话运行 /reload-plugins',
   };
 
   const fmt = s => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, '0')}`;
@@ -31,12 +32,13 @@
     };
     return { tiers: { '5m': tier('5m'), '1h': tier('1h') } };
   }
-  // 开关、档位、立即保活、暂停每个聊天各一份（chats/<会话>.json）；没开过的聊天是关的。
+  // 开关、档位、立即保活、停止/恢复每个聊天各一份（chats/<会话>.json）；没开过的聊天是关的。
   function mergeChat(saved) {
     const c = saved || {};
     return {
       ttl: c.ttl === '1h' ? '1h' : '5m', isOn: c.isOn === true,
-      pingNonce: Number(c.pingNonce) || 0, pauseNonce: Number(c.pauseNonce) || 0,
+      pingNonce: Number(c.pingNonce) || 0,
+      stopNonce: Number(c.stopNonce) || 0, resumeNonce: Number(c.resumeNonce) || 0,
     };
   }
 
@@ -49,6 +51,9 @@
   let holdChat = { sid: null, until: 0 };
   let open = false;
   let misses = 0;
+  // 点了 ⏹/▶ 之后先按点的结果显示，等 mod 把状态改掉（或超时）再听它的。
+  let want = null;       // { sid, from, status, until }
+  let oldMod = { sid: null, until: 0 }; // 这个聊天的 mod 太旧，不认停止键
 
   const isFresh = (s, at) => !s.ended && at - (s.beat || 0) < FRESH_MS;
 
@@ -63,6 +68,8 @@
     if (!sid) return 'nochat';
     if (!chat.isOn) return 'off';
     if (!run) return 'nomod';
+    if (oldMod.sid === sid && Date.now() < oldMod.until) return 'oldmod';
+    if (want && want.sid === sid) return want.status;
     if (run.status !== 'live') return run.status;
     if (run.nextAt == null) return 'empty';
     if (run.sent >= settings.tiers[run.ttl].max) return 'done';
@@ -108,10 +115,13 @@
     $('cdot').classList.toggle('off', !ok);
     $('cttl').textContent = pending ? `${run.ttl} → ${ttl}` : ttl;
     $('ccount').textContent = `保活 ${sent}/${rt.max}`;
-    $('ccd').textContent = cd ?? (status === 'paused' ? '暂停' : '—');
+    const short = { stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重载' };
+    $('ccd').textContent = cd ?? short[status] ?? '—';
     $('ccd').classList.toggle('off', !ok);
-    // 只有正在数的时候才有东西可停。
-    $('chip').classList.toggle('can-pause', ok);
+    // 正在数才有东西可停，停了才有东西可续；过期了两样都没有。
+    $('chip').classList.toggle('can-stop', ok);
+    $('chip').classList.toggle('can-play', status === 'stopped');
+    $('act').title = ok ? '停止保活，下条消息后自动恢复' : '恢复保活';
 
     const l = run && run.last;
     $('last').innerHTML = l
@@ -132,6 +142,7 @@
       const next = sid ? states.find(s => s.sid === sid && isFresh(s, now)) || null : null;
       // mod 正在改写文件时可能读到半截，一帧读不到不算它没了。
       if (next || ++misses >= 2) { run = next; misses = 0; }
+      if (want && (want.sid !== sid || Date.now() >= want.until || (run && run.status !== want.from))) want = null;
     } catch (_) { /* 读不到就沿用上一帧 */ }
     draw();
   }
@@ -169,8 +180,15 @@
   $('iv').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
   // 立即保活：把计数加一，由 mod 看到变化后去发。
   $('now').onclick = () => saveChat(c => { c.pingNonce += 1; return c; });
-  // 暂停：这次空闲不再保活，下一轮对话写入缓存后 mod 自己重新开始。
-  $('pause').onclick = () => saveChat(c => { c.pauseNonce += 1; return c; });
+  // ⏹：这段空闲不再保活，下条消息写入缓存后 mod 自己重新开始；▶：接着原来的倒计时。
+  $('act').onclick = () => {
+    const status = statusOf();
+    if (status !== 'live' && status !== 'stopped') return;
+    if (!run.canStop) { oldMod = { sid, until: Date.now() + 4000 }; draw(); return; }
+    const isStop = status === 'live';
+    want = { sid, from: run.status, status: isStop ? 'stopped' : 'resuming', until: Date.now() + 4000 };
+    saveChat(c => { if (isStop) c.stopNonce += 1; else c.resumeNonce += 1; return c; });
+  };
 
   // 点胶囊开合；按住拖动。拖动交给系统，Rust 一侧在松手后记下新位置。
   let press = null, dragged = false;
@@ -192,7 +210,7 @@
   window.addEventListener('pointerup', () => { press = null; });
   $('chip').addEventListener('click', e => {
     if (dragged) { dragged = false; return; }
-    if (e.target.closest('#pause')) return;
+    if (e.target.closest('#act')) return;
     open = !open;
     draw();
   });
@@ -218,7 +236,7 @@
   // ---------- 浏览器里预览用的假后端 ----------
   function demoBackend() {
     // 两个聊天：demo-a 开着保活，demo-b 从没开过；URL 带 #b 时看 demo-b。
-    const mem = { settings: null, chats: { 'demo-a': { ttl: '5m', isOn: true, pingNonce: 0, pauseNonce: 0 } }, nonce: 0, pause: 0, paused: false, sent: 2, nextAt: Date.now() + 8000, last: null };
+    const mem = { settings: null, chats: { 'demo-a': { ttl: '5m', isOn: true, pingNonce: 0, stopNonce: 0, resumeNonce: 0 } }, nonce: 0, stop: 0, resume: 0, status: 'live', sent: 2, nextAt: Date.now() + 8000, last: null };
     return async (cmd, args) => {
       if (cmd === 'save_settings') { mem.settings = JSON.parse(args.text); return; }
       if (cmd === 'save_chat') {
@@ -229,16 +247,17 @@
           mem.sent++; mem.nextAt = Date.now() + 270000;
           mem.last = { at: Date.now(), read: 146900, write: 0, out: 1 };
         }
-        if (args.sid === 'demo-a' && a.pauseNonce !== mem.pause) { mem.pause = a.pauseNonce; mem.paused = true; }
+        if (args.sid === 'demo-a' && a.stopNonce !== mem.stop) { mem.stop = a.stopNonce; mem.status = 'stopped'; }
+        if (args.sid === 'demo-a' && a.resumeNonce !== mem.resume) { mem.resume = a.resumeNonce; mem.status = 'live'; }
         return;
       }
       if (cmd !== 'snapshot') return;
       const t = Date.now();
-      if (!mem.paused && t >= mem.nextAt) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
+      if (mem.status === 'live' && t >= mem.nextAt) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
       return {
         now: t, settings: mem.settings,
         focusKnown: true, focus: location.hash === '#b' ? 'demo-b' : 'demo-a', chats: mem.chats,
-        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: t, status: mem.paused ? 'paused' : 'live', nextAt: mem.paused ? null : mem.nextAt, note: '', last: mem.last, activeAt: t, beat: t }],
+        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: t, status: mem.status, nextAt: mem.status === 'live' ? mem.nextAt : null, note: '', last: mem.last, activeAt: t, beat: t, canStop: true }],
       };
     };
   }

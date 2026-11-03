@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1040" height="720" viewBox="0 0 520 360" font-family="Segoe UI, Microsoft YaHei UI, sans-serif">
+  <defs>
+    <g id="pillBase">
+      <rect x="0" y="0" width="200" height="28" rx="14" fill="rgba(28,27,26,.94)" stroke="rgba(255,255,255,.08)"/>
+      <text x="38" y="18.5" font-size="11.5" fill="#a6a29a">缓存 <tspan fill="#ece9e1" font-weight="600">5m</tspan></text>
+      <rect x="86" y="8" width="1" height="12" fill="rgba(255,255,255,.14)"/>
+      <text x="96" y="18.5" font-size="11.5" fill="#a6a29a">保活 2/6</text>
+      <rect x="152" y="5" width="42" height="18" rx="9" fill="rgba(255,255,255,.045)"/>
+    </g>
+    <!-- 只有图标本身，没有外框 -->
+    <rect id="stop" x="0" y="0" width="8" height="8" rx="1.5" fill="#ece9e1"/>
+    <path id="play" d="M0.5 0 L7.5 4.5 L0.5 9 Z" fill="#ece9e1" stroke="#ece9e1" stroke-width="1" stroke-linejoin="round"/>
+    <path id="cursor" d="M0 0 L0 13 L3.6 9.6 L6.2 15 L8.2 14 L5.7 8.8 L10.4 8.6 Z" fill="#fff" stroke="#000" stroke-width=".8"/>
+    <circle id="dotOn" cx="20" cy="14" r="4" fill="#ece9e1" stroke="rgba(255,255,255,.12)" stroke-width="3"/>
+    <circle id="dotOff" cx="20" cy="14" r="4" fill="#6f6c66"/>
+  </defs>
+
+  <rect width="520" height="360" fill="#262624"/>
+
+  <text x="24" y="34" font-size="11" fill="#6f6c66">① 保活中</text>
+  <g transform="translate(24,46)">
+    <use href="#pillBase"/><use href="#dotOn"/>
+    <text x="173" y="18.5" font-size="11.5" fill="#ece9e1" text-anchor="middle">3:42</text>
+  </g>
+
+  <text x="268" y="34" font-size="11" fill="#6f6c66">② 悬停：右端浮出 ⏹，药丸长度不变</text>
+  <g transform="translate(268,46)">
+    <use href="#pillBase"/><use href="#dotOn"/>
+    <text x="173" y="18.5" font-size="11.5" fill="#ece9e1" text-anchor="middle" opacity=".15">3:42</text>
+    <use href="#stop" x="169" y="10"/>
+    <use href="#cursor" transform="translate(178,16)"/>
+  </g>
+
+  <text x="24" y="130" font-size="11" fill="#6f6c66">③ 点 ⏹ 之后：停止保活</text>
+  <g transform="translate(24,142)">
+    <use href="#pillBase"/><use href="#dotOff"/>
+    <text x="173" y="18.5" font-size="11.5" fill="#6f6c66" text-anchor="middle">停止</text>
+  </g>
+
+  <text x="268" y="130" font-size="11" fill="#6f6c66">④ 停止后悬停：浮出 ▶，点了恢复保活</text>
+  <g transform="translate(268,142)">
+    <use href="#pillBase"/><use href="#dotOff"/>
+    <text x="173" y="18.5" font-size="11.5" fill="#6f6c66" text-anchor="middle" opacity=".15">停止</text>
+    <use href="#play" x="170" y="9.5"/>
+    <use href="#cursor" transform="translate(178,16)"/>
+  </g>
+
+  <text x="24" y="226" font-size="11" fill="#6f6c66">⑤ 缓存已过期</text>
+  <g transform="translate(24,238)">
+    <use href="#pillBase"/><use href="#dotOff"/>
+    <text x="173" y="18.5" font-size="11.5" fill="#6f6c66" text-anchor="middle">过期</text>
+  </g>
+
+  <text x="268" y="226" font-size="11" fill="#6f6c66">⑤ 过期时悬停：不浮出任何按钮</text>
+  <g transform="translate(268,238)">
+    <use href="#pillBase"/><use href="#dotOff"/>
+    <text x="173" y="18.5" font-size="11.5" fill="#6f6c66" text-anchor="middle">过期</text>
+    <use href="#cursor" transform="translate(178,16)"/>
+  </g>
+
+  <text x="24" y="306" font-size="10" fill="#6f6c66">不点 ▶ 的话，下一轮对话结束后也会自动回到 ①。</text>
+  <text x="24" y="322" font-size="10" fill="#6f6c66">缓存已经没了，停和续都没有意义；▶ 时刚好过期也落到 ⑤，不补发。下一轮对话结束后回到 ①。</text>
+</svg>

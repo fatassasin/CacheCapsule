@@ -292,25 +292,27 @@ test("a subagent's question leaves the main turn busy", async ($, on) => {
   expect(state(disk)).toMatchObject({ status: 'busy' })
 })
 
-test('a pause stops this idle stretch; the next turn starts keeping alive again', async ($, on) => {
+const stoppable = (stopNonce: number, resumeNonce = 0) =>
+  JSON.stringify({ ttl: '5m', isOn: true, pingNonce: 0, stopNonce, resumeNonce })
+
+test('stop ends this idle stretch; the next turn starts keeping alive again', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   const disk = files(on)
   const forks = { n: 0 }
   common(on, forks)
-  const pausable = (pauseNonce: number) => JSON.stringify({ ttl: '5m', isOn: true, pingNonce: 0, pauseNonce })
 
-  disk.set(CHAT, pausable(3))
+  disk.set(CHAT, stoppable(3))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.turn.start({ text: 'hi', turnId: 't1' })
   await complete($)
   await clock.advance(1_000)
   // The count it started with is only a baseline.
-  expect(state(disk)).toMatchObject({ status: 'live' })
+  expect(state(disk)).toMatchObject({ status: 'live', canStop: true })
 
-  disk.set(CHAT, pausable(4))
+  disk.set(CHAT, stoppable(4))
   await clock.advance(1_000)
-  expect(state(disk)).toMatchObject({ status: 'paused', nextAt: null })
+  expect(state(disk)).toMatchObject({ status: 'stopped', nextAt: null })
   await clock.advance(600_000)
   expect(forks.n).toBe(0)
 
@@ -322,21 +324,76 @@ test('a pause stops this idle stretch; the next turn starts keeping alive again'
   expect(forks.n).toBe(1)
 })
 
-test('a pause pressed mid-turn does nothing', async ($, on) => {
+test('resume picks the countdown up again, or finds the cache gone', async ($, on) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.store(on)
   const disk = files(on)
   const forks = { n: 0 }
   common(on, forks)
-  const pausable = (pauseNonce: number) => JSON.stringify({ ttl: '5m', isOn: true, pingNonce: 0, pauseNonce })
 
-  disk.set(CHAT, pausable(0))
+  disk.set(CHAT, stoppable(0))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await $.turn.start({ text: 'hi', turnId: 't1' })
-  disk.set(CHAT, pausable(1))
+  await complete($)
+  disk.set(CHAT, stoppable(1))
+  await clock.advance(60_000)
+  expect(state(disk)).toMatchObject({ status: 'stopped' })
+
+  // Still warm: the countdown runs to the same 4:30 it had.
+  disk.set(CHAT, stoppable(1, 1))
+  await clock.advance(1_000)
+  expect(state(disk)).toMatchObject({ status: 'live', nextAt: 1_000_000 + 270_000 })
+  await clock.advance(210_000)
+  expect(forks.n).toBe(1)
+
+  // Stopped again and left past the TTL: resuming has nothing to keep.
+  disk.set(CHAT, stoppable(2, 1))
+  await clock.advance(400_000)
+  disk.set(CHAT, stoppable(2, 2))
+  await clock.advance(2_000)
+  expect(state(disk)).toMatchObject({ status: 'expired' })
+  expect(forks.n).toBe(1)
+})
+
+test('stop pressed mid-turn does nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  const forks = { n: 0 }
+  common(on, forks)
+
+  disk.set(CHAT, stoppable(0))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  disk.set(CHAT, stoppable(1))
   await clock.advance(1_000)
   expect(state(disk)).toMatchObject({ status: 'busy' })
   await complete($)
+  await clock.advance(271_000)
+  expect(forks.n).toBe(1)
+})
+
+test('an expired cache keeps alive again after the next message, while the switch is on', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  const forks = { n: 0 }
+  common(on, forks)
+
+  disk.set(CHAT, stoppable(0))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await complete($)
+  // Stopped and left until the cache is gone; the due tick then marks it expired.
+  disk.set(CHAT, stoppable(1))
+  await clock.advance(400_000)
+  disk.set(CHAT, stoppable(1, 1))
+  await clock.advance(2_000)
+  expect(state(disk)).toMatchObject({ status: 'expired' })
+
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  await complete($, 't2')
+  expect(state(disk)).toMatchObject({ status: 'live', sent: 0 })
   await clock.advance(271_000)
   expect(forks.n).toBe(1)
 })

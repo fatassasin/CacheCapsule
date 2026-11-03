@@ -17,7 +17,7 @@ const WAITS_ON_PERSON = ['AskUserQuestion', 'ExitPlanMode'] as const
 
 const DEFAULT_TIERS: Tiers = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } }
 // A chat the capsule has never switched on keeps nothing alive.
-const DEFAULT_CHAT: Chat = { ttl: '5m', isOn: false, pingNonce: 0, pauseNonce: 0 }
+const DEFAULT_CHAT: Chat = { ttl: '5m', isOn: false, pingNonce: 0, stopNonce: 0, resumeNonce: 0 }
 const DEFAULTS: Prefs = { ...DEFAULT_CHAT, tiers: DEFAULT_TIERS }
 const IDLE_RUN: Run = { ttl: '5m', sent: 0, nextAt: null, warmAt: null, status: 'empty', note: '' }
 
@@ -44,7 +44,8 @@ function mergePrefs(settings: unknown, chat: unknown): Prefs {
     ttl: c.ttl === '1h' ? '1h' : '5m',
     isOn: c.isOn === true,
     pingNonce: Number(c.pingNonce) || 0,
-    pauseNonce: Number(c.pauseNonce) || 0,
+    stopNonce: Number(c.stopNonce) || 0,
+    resumeNonce: Number(c.resumeNonce) || 0,
     tiers: { '5m': tier('5m'), '1h': tier('1h') },
   }
 }
@@ -89,7 +90,8 @@ let activeAt = 0
 let lastWritten = ''
 let lastBeat = 0
 let seenNonce: number | undefined
-let seenPause: number | undefined
+let seenStop: number | undefined
+let seenResume: number | undefined
 let loadedPrefs = ''
 let hasSettings = false
 // When this turn's last answered main-thread request went out. The cache's
@@ -124,7 +126,8 @@ async function writeState($: EngineInterface, t: number, isEnded = false) {
   const r = await read($, run)
   const l = await read($, last)
   const sid = await $.session.id()
-  const body = { sid, ttl: r.ttl, sent: r.sent, nextAt: r.nextAt, warmAt: r.warmAt, status: r.status, note: r.note, last: l, activeAt, ended: isEnded }
+  // `canStop` tells the capsule this mod knows the stop button; an older one would ignore it.
+  const body = { sid, ttl: r.ttl, sent: r.sent, nextAt: r.nextAt, warmAt: r.warmAt, status: r.status, note: r.note, last: l, activeAt, ended: isEnded, canStop: true }
   const text = JSON.stringify(body)
   // Only the heartbeat changes between identical states.
   if (!isEnded && text === lastWritten && t - lastBeat < BEAT_MS) return
@@ -161,8 +164,8 @@ async function ping($: EngineInterface) {
     const isHit = got.read > 0
     await update($, run, (r): Run => {
       const counted = { ...r, sent: r.sent + 1, warmAt: isHit ? sentAt : r.warmAt }
-      // Paused while this one was out (or a manual one while paused): stay paused.
-      if (r.status === 'paused') return counted
+      // Stopped while this one was out (or a manual one while stopped): stay stopped.
+      if (r.status === 'stopped') return counted
       return {
         ...counted,
         nextAt: isHit ? sentAt + p.tiers[r.ttl].iv * 1000 : null,
@@ -222,11 +225,23 @@ async function syncPrefs($: EngineInterface, t: number) {
   }
   seenNonce = after.pingNonce
 
-  // "Not this time": stop until the next real request starts a run again.
-  if (seenPause !== undefined && after.pauseNonce !== seenPause && !isBusy) {
-    await update($, run, (x): Run => ({ ...x, nextAt: null, status: 'paused', note: '' }))
+  // Stop: nothing more until the next real request starts a run again.
+  if (seenStop !== undefined && after.stopNonce !== seenStop && !isBusy) {
+    await update($, run, (x): Run => ({ ...x, nextAt: null, status: 'stopped', note: '' }))
   }
-  seenPause = after.pauseNonce
+  seenStop = after.stopNonce
+  // Resume: pick the countdown up from the last warm request; the tick then
+  // pings at once if that is already due, or marks it expired.
+  if (seenResume !== undefined && after.resumeNonce !== seenResume) {
+    await update($, run, (x): Run =>
+      x.status !== 'stopped'
+        ? x
+        : x.warmAt === null
+          ? { ...x, nextAt: null, status: 'empty' }
+          : { ...x, nextAt: x.warmAt + after.tiers[x.ttl].iv * 1000, status: 'live' },
+    )
+  }
+  seenResume = after.resumeNonce
   return after
 }
 
@@ -266,7 +281,8 @@ export const register: Register = on => {
     const saved = await loadPrefs($)
     loadedPrefs = JSON.stringify(saved)
     seenNonce = saved.pingNonce
-    seenPause = saved.pauseNonce
+    seenStop = saved.stopNonce
+    seenResume = saved.resumeNonce
     await update($, prefs, () => saved)
     await applyTtl($, saved)
     $.clock.every(1000, () => void tick($))
