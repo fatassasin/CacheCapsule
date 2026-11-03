@@ -138,6 +138,8 @@ fn snapshot() -> Value {
             }
         }
     }
+    let focus = focus::current();
+    inherit_switches(&dir.join("chats"), focus::rewound());
     let mut chats = serde_json::Map::new();
     if let Ok(entries) = fs::read_dir(dir.join("chats")) {
         for entry in entries.flatten() {
@@ -150,7 +152,6 @@ fn snapshot() -> Value {
             }
         }
     }
-    let focus = focus::current();
     json!({
         "settings": read_json(&dir.join("settings.json")),
         "focusKnown": focus.is_some(),
@@ -159,6 +160,24 @@ fn snapshot() -> Value {
         "states": states,
         "now": now_ms(),
     })
+}
+
+/// 聊天换了会话（rewind）时，新会话还没有开关文件：照最近一个先前会话的抄一份，
+/// 免得开着的保活一换会话就成了关。计数归零——新会话的 mod 起步时读到的是没有文件，基线就是 0。
+fn inherit_switches(chats: &Path, rewound: Vec<(String, Vec<String>)>) {
+    for (sid, earlier) in rewound {
+        let path = chats.join(format!("{sid}.json"));
+        if path.exists() {
+            continue;
+        }
+        let Some(mut v) = earlier.iter().find_map(|e| read_json(&chats.join(format!("{e}.json")))) else { continue };
+        if let Some(o) = v.as_object_mut() {
+            for k in ["pingNonce", "stopNonce", "resumeNonce", "pauseNonce"] {
+                o.remove(k);
+            }
+        }
+        let _ = write_atomic(&path, &v.to_string());
+    }
 }
 
 #[tauri::command]

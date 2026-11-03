@@ -397,3 +397,34 @@ test('an expired cache keeps alive again after the next message, while the switc
   await clock.advance(271_000)
   expect(forks.n).toBe(1)
 })
+
+test('an interrupted turn keeps counting down from the cache the last turn wrote', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  disk.set(CHAT, chat('5m', true))
+  const forks = { n: 0 }
+  common(on, forks)
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await complete($)
+  await clock.advance(100_000)
+  // Sent and stopped at once: no request got through.
+  await $.turn.start({ text: 'more', turnId: 't2' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't2', reason: 'aborted' })
+  await clock.advance(1_000)
+  expect(state(disk)).toMatchObject({ status: 'live', note: '' })
+  // Still due 4:30 after the first turn's request, not after the interrupted one.
+  await clock.advance(168_000)
+  expect(forks.n).toBe(0)
+  await clock.advance(2_000)
+  expect(forks.n).toBe(1)
+
+  // Interrupted once the pings have run out and the cache with them: nothing left to keep alive.
+  await clock.advance(270_000 * 10)
+  await $.turn.start({ text: 'later', turnId: 't3' })
+  await $.turn.complete({ answer: '', durationMs: 1, isAborted: true, turnId: 't3', reason: 'aborted' })
+  await clock.advance(1_000)
+  expect(state(disk)).toMatchObject({ status: 'error', note: '本轮没有写入缓存' })
+})

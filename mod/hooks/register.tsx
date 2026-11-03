@@ -335,11 +335,18 @@ export const register: Register = on => {
       isBusy = false
       const t = await $.clock.now()
       activeAt = t
-      // No usage: no request got through, so nothing is known to be cached.
-      if (!e.usage) {
-        await update($, run, (r): Run => ({ ...r, nextAt: null, status: 'error', note: '本轮没有写入缓存' }))
-      } else {
+      // No usage: the turn was interrupted or failed. A request that got through
+      // earlier in it still wrote the cache; failing that, what the last turn
+      // cached is still there until its TTL runs out, so pick that countdown up.
+      if (e.usage || stepAt !== undefined) {
         await startRun($, stepAt ?? t)
+      } else {
+        const p = await read($, prefs)
+        await update($, run, (r): Run =>
+          r.warmAt !== null && t - r.warmAt < TTL_SECONDS[r.ttl] * 1000
+            ? { ...r, nextAt: r.warmAt + p.tiers[r.ttl].iv * 1000, status: 'live', note: '' }
+            : { ...r, nextAt: null, status: 'error', note: '本轮没有写入缓存' },
+        )
       }
       await writeState($, t)
     }

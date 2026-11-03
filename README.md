@@ -16,11 +16,12 @@ Claude 桌面端（Windows）的缓存保活小胶囊。独立的 Tauri 程序�
 
 倒计时从写缓存的那次请求发出时算起（TTL 从请求开始计，不是从回复写完计）。一轮对话结束后开始保活；
 轮次没结束、但停在 `AskUserQuestion` 提问或 `ExitPlanMode` 等批准上时，也照样保活，人一回答就回到「对话中」。
+打断的一轮没写进新缓存，但上一轮写的还在：接着上一轮的倒计时保活，缓存已经过期才报「本轮没有写入缓存」。
 
 两边只通过 `%USERPROFILE%\.claude\cache-keepalive\` 里的文件说话：
 
 - `settings.json`：胶囊写、mod 每秒读。`{tiers:{'5m':{iv,max},'1h':{iv,max}}}`，各档的间隔和次数，所有聊天共用。
-- `chats/<会话>.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce, stopNonce, resumeNonce}`，每个聊天自己一份；没有文件就是关，只有在这个聊天里打开过开关才会写。胶囊最左边的圆点橙色表示这个聊天的开关开着，灰色是关着。只认鼠标点击，留在按钮上的键盘焦点按空格、回车不会拨动开关。`pingNonce` 加一即「立即保活」。胶囊悬停时右端浮出 ⏹ / ▶：`stopNonce` 加一停止这段空闲的保活（状态 `stopped`），`resumeNonce` 加一接着原来的倒计时续上；缓存过期时两者都不出现。不管停止还是过期，只要开关开着，下一条消息写入缓存后就自动重新保活；对话进行中按 ⏹ 不起作用。
+- `chats/<会话>.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce, stopNonce, resumeNonce}`，每个聊天自己一份；没有文件就是关，只有在这个聊天里打开过开关才会写。胶囊最左边的圆点橙色表示这个聊天的开关开着，灰色是关着。只认鼠标点击，留在按钮上的键盘焦点按空格、回车不会拨动开关。打断后改发、回到某条消息重来（rewind）时桌面版会给这个聊天另起一个会话，胶囊顺着会话记录里的 `rewindEdges` 把先前会话的开关和档位抄给新会话（计数归零）；分叉出去的聊天不抄。`pingNonce` 加一即「立即保活」。胶囊悬停时右端浮出 ⏹ / ▶：`stopNonce` 加一停止这段空闲的保活（状态 `stopped`），`resumeNonce` 加一接着原来的倒计时续上；缓存过期时两者都不出现。不管停止还是过期，只要开关开着，下一条消息写入缓存后就自动重新保活；对话进行中按 ⏹ 不起作用。
 - `state/<会话>.json`：mod 写、胶囊读。含 `sid ttl sent nextAt warmAt status note last activeAt beat ended`；`canStop` 表示这个 mod 认得停止键，旧版没有它时胶囊提示先 `/reload-plugins`。`beat` 是心跳，20 秒没更新就当会话没了。
 - `capsule.json`：胶囊自己的，`{offR, offB}`。
 
