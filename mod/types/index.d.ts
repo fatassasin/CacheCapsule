@@ -9,15 +9,15 @@ export type Tiers = { '5m': Tier; '1h': Tier }
 /**
  * What the capsule writes to `chats/<session>.json`, one per chat; a chat
  * with no file is off. `pingNonce` is a counter it bumps for "keep alive
- * now"; the mod fires when the number changes.
+ * now", `pauseNonce` one for "not this time"; the mod acts when a number changes.
  */
-export type Chat = { ttl: Ttl; isOn: boolean; pingNonce: number }
+export type Chat = { ttl: Ttl; isOn: boolean; pingNonce: number; pauseNonce: number }
 
 /** Both files as this session reads them. */
 export type Prefs = Chat & { tiers: Tiers }
 
 /** Why the countdown is not running, or `live` while it is. */
-export type RunStatus = 'live' | 'busy' | 'done' | 'closed' | 'empty' | 'expired' | 'error'
+export type RunStatus = 'live' | 'busy' | 'done' | 'closed' | 'empty' | 'expired' | 'error' | 'paused'
 
 /**
  * The keep-alive run since the last real request: `ttl` is the TTL that

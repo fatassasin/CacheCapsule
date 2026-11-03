@@ -40,6 +40,19 @@ body {
 .chip .count { font-variant-numeric: tabular-nums; }
 .chip .cd { font-variant-numeric: tabular-nums; color: var(--text); background: var(--frost2); border-radius: 999px; padding: 1px 9px; }
 .chip .cd.off { color: var(--mute); }
+/* 悬停才出来的暂停键：平时宽度为零，连同前面的间距一起收起。 */
+.chip .pause {
+  all: unset; cursor: pointer; position: relative; flex: none; width: 0; height: 20px; margin-left: -10px;
+  border-radius: 50%; opacity: 0; overflow: hidden; color: var(--dim);
+  transition: width .15s, margin-left .15s, opacity .15s;
+}
+.chip.can-pause:hover .pause { width: 20px; margin-left: 0; opacity: 1; }
+.chip .pause:hover { background: var(--frost2); color: var(--text); }
+.chip .pause::before, .chip .pause::after {
+  content: ""; position: absolute; top: 6px; width: 2px; height: 8px; border-radius: 1px; background: currentColor;
+}
+.chip .pause::before { left: 7px; }
+.chip .pause::after { left: 11px; }
 
 /* ---------- 展开态 ---------- */
 .pop {

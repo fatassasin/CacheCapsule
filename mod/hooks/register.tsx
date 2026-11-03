@@ -17,7 +17,7 @@ const WAITS_ON_PERSON = ['AskUserQuestion', 'ExitPlanMode'] as const
 
 const DEFAULT_TIERS: Tiers = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } }
 // A chat the capsule has never switched on keeps nothing alive.
-const DEFAULT_CHAT: Chat = { ttl: '5m', isOn: false, pingNonce: 0 }
+const DEFAULT_CHAT: Chat = { ttl: '5m', isOn: false, pingNonce: 0, pauseNonce: 0 }
 const DEFAULTS: Prefs = { ...DEFAULT_CHAT, tiers: DEFAULT_TIERS }
 const IDLE_RUN: Run = { ttl: '5m', sent: 0, nextAt: null, warmAt: null, status: 'empty', note: '' }
 
@@ -44,6 +44,7 @@ function mergePrefs(settings: unknown, chat: unknown): Prefs {
     ttl: c.ttl === '1h' ? '1h' : '5m',
     isOn: c.isOn === true,
     pingNonce: Number(c.pingNonce) || 0,
+    pauseNonce: Number(c.pauseNonce) || 0,
     tiers: { '5m': tier('5m'), '1h': tier('1h') },
   }
 }
@@ -88,6 +89,7 @@ let activeAt = 0
 let lastWritten = ''
 let lastBeat = 0
 let seenNonce: number | undefined
+let seenPause: number | undefined
 let loadedPrefs = ''
 let hasSettings = false
 // When this turn's last answered main-thread request went out. The cache's
@@ -157,14 +159,17 @@ async function ping($: EngineInterface) {
     }
     await update($, last, () => got)
     const isHit = got.read > 0
-    await update($, run, (r): Run => ({
-      ...r,
-      sent: r.sent + 1,
-      nextAt: isHit ? sentAt + p.tiers[r.ttl].iv * 1000 : null,
-      warmAt: isHit ? sentAt : r.warmAt,
-      status: isHit ? 'live' : 'error',
-      note: isHit ? '' : '没有命中缓存',
-    }))
+    await update($, run, (r): Run => {
+      const counted = { ...r, sent: r.sent + 1, warmAt: isHit ? sentAt : r.warmAt }
+      // Paused while this one was out (or a manual one while paused): stay paused.
+      if (r.status === 'paused') return counted
+      return {
+        ...counted,
+        nextAt: isHit ? sentAt + p.tiers[r.ttl].iv * 1000 : null,
+        status: isHit ? 'live' : 'error',
+        note: isHit ? '' : '没有命中缓存',
+      }
+    })
   } finally {
     isPinging = false
     await writeState($, await $.clock.now())
@@ -216,6 +221,12 @@ async function syncPrefs($: EngineInterface, t: number) {
     await manualPing($, t)
   }
   seenNonce = after.pingNonce
+
+  // "Not this time": stop until the next real request starts a run again.
+  if (seenPause !== undefined && after.pauseNonce !== seenPause && !isBusy) {
+    await update($, run, (x): Run => ({ ...x, nextAt: null, status: 'paused', note: '' }))
+  }
+  seenPause = after.pauseNonce
   return after
 }
 
@@ -255,6 +266,7 @@ export const register: Register = on => {
     const saved = await loadPrefs($)
     loadedPrefs = JSON.stringify(saved)
     seenNonce = saved.pingNonce
+    seenPause = saved.pauseNonce
     await update($, prefs, () => saved)
     await applyTtl($, saved)
     $.clock.every(1000, () => void tick($))

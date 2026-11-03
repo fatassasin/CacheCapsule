@@ -291,3 +291,52 @@ test("a subagent's question leaves the main turn busy", async ($, on) => {
   expect(forks.n).toBe(0)
   expect(state(disk)).toMatchObject({ status: 'busy' })
 })
+
+test('a pause stops this idle stretch; the next turn starts keeping alive again', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  const forks = { n: 0 }
+  common(on, forks)
+  const pausable = (pauseNonce: number) => JSON.stringify({ ttl: '5m', isOn: true, pingNonce: 0, pauseNonce })
+
+  disk.set(CHAT, pausable(3))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  await complete($)
+  await clock.advance(1_000)
+  // The count it started with is only a baseline.
+  expect(state(disk)).toMatchObject({ status: 'live' })
+
+  disk.set(CHAT, pausable(4))
+  await clock.advance(1_000)
+  expect(state(disk)).toMatchObject({ status: 'paused', nextAt: null })
+  await clock.advance(600_000)
+  expect(forks.n).toBe(0)
+
+  await $.turn.start({ text: 'again', turnId: 't2' })
+  expect(state(disk)).toMatchObject({ status: 'busy' })
+  await complete($, 't2')
+  expect(state(disk)).toMatchObject({ status: 'live', sent: 0 })
+  await clock.advance(271_000)
+  expect(forks.n).toBe(1)
+})
+
+test('a pause pressed mid-turn does nothing', async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  const forks = { n: 0 }
+  common(on, forks)
+  const pausable = (pauseNonce: number) => JSON.stringify({ ttl: '5m', isOn: true, pingNonce: 0, pauseNonce })
+
+  disk.set(CHAT, pausable(0))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await $.turn.start({ text: 'hi', turnId: 't1' })
+  disk.set(CHAT, pausable(1))
+  await clock.advance(1_000)
+  expect(state(disk)).toMatchObject({ status: 'busy' })
+  await complete($)
+  await clock.advance(271_000)
+  expect(forks.n).toBe(1)
+})

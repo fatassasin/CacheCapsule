@@ -20,8 +20,8 @@ Claude 桌面端（Windows）的缓存保活小胶囊。独立的 Tauri 程序�
 两边只通过 `%USERPROFILE%\.claude\cache-keepalive\` 里的文件说话：
 
 - `settings.json`：胶囊写、mod 每秒读。`{tiers:{'5m':{iv,max},'1h':{iv,max}}}`，各档的间隔和次数，所有聊天共用。
-- `chats/<会话>.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce}`，每个聊天自己一份；没有文件就是关，只有在这个聊天里打开过开关才会写。`pingNonce` 加一即「立即保活」。
-- `state/<会话>.json`：mod 写、胶囊读。含 `sid ttl sent nextAt warmAt status note last activeAt beat ended`。`beat` 是心跳，20 秒没更新就当会话没了。
+- `chats/<会话>.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce, pauseNonce}`，每个聊天自己一份；没有文件就是关，只有在这个聊天里打开过开关才会写。`pingNonce` 加一即「立即保活」；`pauseNonce` 加一即暂停（胶囊悬停时右侧的暂停键）：这段空闲不再保活，状态显示「已暂停」，下一轮对话写入缓存后自动重新开始，对话进行中按下不起作用。
+- `state/<会话>.json`：mod 写、胶囊读。含 `sid ttl sent nextAt warmAt status note last activeAt beat ended`，`status` 多一个 `paused`。`beat` 是心跳，20 秒没更新就当会话没了。
 - `capsule.json`：胶囊自己的，`{offR, offB}`。
 
 `<会话>` 是 Claude Code 的会话 id。胶囊只显示桌面版眼下打开的那个聊天：桌面版切聊天时会改

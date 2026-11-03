@@ -13,7 +13,7 @@
   const DEFAULT_TIERS = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } };
   const STATUS = {
     live: '保活中', busy: '对话中', done: '已用完', off: '已关闭', closed: '窗口已关闭',
-    empty: '等待首条回复', expired: '缓存已过期', error: '出错',
+    empty: '等待首条回复', expired: '缓存已过期', error: '出错', paused: '已暂停 · 下次对话恢复',
     nochat: '未打开对话', nomod: '未加载 · 在本对话运行 /reload-plugins',
   };
 
@@ -31,10 +31,13 @@
     };
     return { tiers: { '5m': tier('5m'), '1h': tier('1h') } };
   }
-  // 开关、档位、立即保活每个聊天各一份（chats/<会话>.json）；没开过的聊天是关的。
+  // 开关、档位、立即保活、暂停每个聊天各一份（chats/<会话>.json）；没开过的聊天是关的。
   function mergeChat(saved) {
     const c = saved || {};
-    return { ttl: c.ttl === '1h' ? '1h' : '5m', isOn: c.isOn === true, pingNonce: Number(c.pingNonce) || 0 };
+    return {
+      ttl: c.ttl === '1h' ? '1h' : '5m', isOn: c.isOn === true,
+      pingNonce: Number(c.pingNonce) || 0, pauseNonce: Number(c.pauseNonce) || 0,
+    };
   }
 
   let settings = mergeTiers(null);
@@ -105,8 +108,10 @@
     $('cdot').classList.toggle('off', !ok);
     $('cttl').textContent = pending ? `${run.ttl} → ${ttl}` : ttl;
     $('ccount').textContent = `保活 ${sent}/${rt.max}`;
-    $('ccd').textContent = cd ?? '—';
+    $('ccd').textContent = cd ?? (status === 'paused' ? '暂停' : '—');
     $('ccd').classList.toggle('off', !ok);
+    // 只有正在数的时候才有东西可停。
+    $('chip').classList.toggle('can-pause', ok);
 
     const l = run && run.last;
     $('last').innerHTML = l
@@ -164,6 +169,8 @@
   $('iv').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
   // 立即保活：把计数加一，由 mod 看到变化后去发。
   $('now').onclick = () => saveChat(c => { c.pingNonce += 1; return c; });
+  // 暂停：这次空闲不再保活，下一轮对话写入缓存后 mod 自己重新开始。
+  $('pause').onclick = () => saveChat(c => { c.pauseNonce += 1; return c; });
 
   // 点胶囊开合；按住拖动。拖动交给系统，Rust 一侧在松手后记下新位置。
   let press = null, dragged = false;
@@ -183,8 +190,9 @@
     if (tauri) tauri.window.getCurrentWindow().startDragging();
   });
   window.addEventListener('pointerup', () => { press = null; });
-  $('chip').addEventListener('click', () => {
+  $('chip').addEventListener('click', e => {
     if (dragged) { dragged = false; return; }
+    if (e.target.closest('#pause')) return;
     open = !open;
     draw();
   });
@@ -210,7 +218,7 @@
   // ---------- 浏览器里预览用的假后端 ----------
   function demoBackend() {
     // 两个聊天：demo-a 开着保活，demo-b 从没开过；URL 带 #b 时看 demo-b。
-    const mem = { settings: null, chats: { 'demo-a': { ttl: '5m', isOn: true, pingNonce: 0 } }, nonce: 0, sent: 2, nextAt: Date.now() + 8000, last: null };
+    const mem = { settings: null, chats: { 'demo-a': { ttl: '5m', isOn: true, pingNonce: 0, pauseNonce: 0 } }, nonce: 0, pause: 0, paused: false, sent: 2, nextAt: Date.now() + 8000, last: null };
     return async (cmd, args) => {
       if (cmd === 'save_settings') { mem.settings = JSON.parse(args.text); return; }
       if (cmd === 'save_chat') {
@@ -221,15 +229,16 @@
           mem.sent++; mem.nextAt = Date.now() + 270000;
           mem.last = { at: Date.now(), read: 146900, write: 0, out: 1 };
         }
+        if (args.sid === 'demo-a' && a.pauseNonce !== mem.pause) { mem.pause = a.pauseNonce; mem.paused = true; }
         return;
       }
       if (cmd !== 'snapshot') return;
       const t = Date.now();
-      if (t >= mem.nextAt) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
+      if (!mem.paused && t >= mem.nextAt) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
       return {
         now: t, settings: mem.settings,
         focusKnown: true, focus: location.hash === '#b' ? 'demo-b' : 'demo-a', chats: mem.chats,
-        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, nextAt: mem.nextAt, warmAt: t, status: 'live', note: '', last: mem.last, activeAt: t, beat: t }],
+        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: t, status: mem.paused ? 'paused' : 'live', nextAt: mem.paused ? null : mem.nextAt, note: '', last: mem.last, activeAt: t, beat: t }],
       };
     };
   }
