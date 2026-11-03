@@ -115,7 +115,16 @@
 
     $('cdot').classList.toggle('on', !!sid && chat.isOn);
     $('cttl').textContent = pending ? `${run.ttl} → ${ttl}` : ttl;
-    $('ccount').textContent = `保活 ${sent}/${rt.max}`;
+    // 数到 0 就是 mod 正在发这次保活，等它回来改 nextAt 之前都显示「保活中」；
+    // 字短一截，先占住原来的宽度，免得药丸左边缘跳一下。
+    const cc = $('ccount');
+    if (ok && left === 0) {
+      if (!cc.style.minWidth) cc.style.minWidth = `${cc.offsetWidth}px`;
+      cc.textContent = '保活中';
+    } else {
+      cc.style.minWidth = '';
+      cc.textContent = `保活 ${sent}/${rt.max}`;
+    }
     const short = { stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重载' };
     $('ccd').textContent = cd ?? short[status] ?? '—';
     $('ccd').classList.toggle('off', !ok);
@@ -263,7 +272,8 @@
       }
       if (cmd !== 'snapshot') return;
       const t = Date.now();
-      if (mem.status === 'live' && t >= mem.nextAt) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
+      // 真的 mod 发一次保活要一两秒，这段时间倒计时停在 0。
+      if (mem.status === 'live' && t >= mem.nextAt + 1500) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
       return {
         now: t, settings: mem.settings,
         focusKnown: true, focus: location.hash === '#b' ? 'demo-b' : 'demo-a', chats: mem.chats,
