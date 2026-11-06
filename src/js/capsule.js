@@ -100,15 +100,22 @@
   function draw() {
     const ttl = chat.ttl, t = settings.tiers[ttl];
     const status = statusOf(), ok = status === 'live';
-    // 正在数的那一轮按它写缓存时的档；对话中或没在数时，下一轮按现在选的档，
+    // 正在数（或停着）的那一轮按它写缓存时的档；对话中或没在数时，下一轮按现在选的档，
     // 改这一档的次数和间隔要立刻反映出来。
+    const isStopped = status === 'stopped' && !!run && run.warmAt != null;
     const isCounting = !!run && run.nextAt != null && status !== 'busy';
-    const runTtl = isCounting ? run.ttl : ttl, rt = settings.tiers[runTtl];
+    const runTtl = isCounting || isStopped ? run.ttl : ttl, rt = settings.tiers[runTtl];
     const sent = run ? run.sent : 0;
     const left = ok ? Math.max(0, Math.ceil((run.nextAt - now) / 1000)) : 0;
+    // 停着时 mod 不再数，但上一轮照样在走：▶ 是从上次写缓存接着数的，
+    // 过了保活点还没过期就会立刻补一次。所以先数到保活点，过了再数到缓存过期。
+    const roundLeft = isStopped ? Math.ceil((run.warmAt + rt.iv * 1000 - now) / 1000) : 0;
+    const cacheLeft = isStopped ? Math.ceil((run.warmAt + TTL[runTtl] * 1000 - now) / 1000) : 0;
+    const isLate = isStopped && roundLeft <= 0 && cacheLeft > 0;
+    const stopCd = roundLeft > 0 ? fmt(roundLeft) : isLate ? fmt(cacheLeft) : null;
     // 对话中虽然还没开始数，也给一个时间：就是下一轮满格的间隔。
-    const cd = ok ? fmt(left) : status === 'busy' ? fmt(rt.iv) : null;
-    const pending = isCounting && run.ttl !== ttl;
+    const cd = ok ? fmt(left) : status === 'busy' ? fmt(rt.iv) : stopCd;
+    const pending = (isCounting || isStopped) && run.ttl !== ttl;
 
     $('pop').hidden = !open;
     document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.ttl === ttl));
@@ -141,7 +148,12 @@
     const cdEl = $('cd');
     cdEl.textContent = cd ?? label;
     cdEl.classList.toggle('mute', cd === null);
-    $('bar').style.width = ok ? `${Math.min(100, (1 - left / rt.iv) * 100)}%` : '0%';
+    cdEl.classList.toggle('warn', isLate);
+    $('cdLabel').textContent = !isStopped ? '下次保活'
+      : roundLeft > 0 ? '本轮保活点还剩' : isLate ? '已过保活点 · 缓存还剩' : '缓存已过期';
+    const barLeft = ok ? left : isStopped ? Math.max(0, roundLeft) : null;
+    $('bar').style.width = barLeft === null ? '0%' : `${Math.min(100, (1 - barLeft / rt.iv) * 100)}%`;
+    $('bar').classList.toggle('idle', isStopped);
     $('cnt').textContent = `${sent} / ${rt.max}`;
     $('pips').innerHTML = Array.from({ length: rt.max }, (_, i) => `<i class="${i < sent ? 'done' : ''}"></i>`).join('');
     $('pill').textContent = label;
@@ -161,12 +173,17 @@
     }
     const short = { busy: '对话中', stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重启' };
     // 对话中胶囊里不放那个还没开始数的时间，跟面板右上角一样写「对话中」。
-    $('ccd').textContent = (ok ? cd : null) ?? short[status] ?? '—';
+    // 停着等到缓存都过期了，▶ 也救不回来，跟 mod 恢复后报的一样写「过期」。
+    const isGone = isStopped && cacheLeft <= 0;
+    $('ccd').textContent = (ok || isStopped ? cd : null) ?? (isGone ? short.expired : short[status]) ?? '—';
     $('ccd').classList.toggle('off', !ok);
+    $('ccd').classList.toggle('warn', isLate);
     // 正在数才有东西可停，停了才有东西可续；过期了两样都没有。
     $('chip').classList.toggle('can-stop', ok);
     $('chip').classList.toggle('can-play', status === 'stopped');
-    $('act').title = ok ? '停止保活，下条消息后自动恢复' : '恢复保活';
+    $('act').title = ok ? '停止保活，下条消息后自动恢复'
+      : roundLeft > 0 ? `恢复保活 · ${stopCd} 后保活`
+        : isLate ? `恢复保活 · 已过保活点，会立刻保活一次（缓存还剩 ${stopCd}）` : '恢复保活';
 
     const l = run && run.last;
     $('last').innerHTML = l
@@ -292,7 +309,7 @@
   // ---------- 浏览器里预览用的假后端 ----------
   function demoBackend() {
     // 两个聊天：demo-a 开着保活，demo-b 从没开过；URL 带 #b 时看 demo-b。
-    const mem = { settings: null, chats: { 'demo-a': { ttl: '5m', isOn: true, pingNonce: 0, stopNonce: 0, resumeNonce: 0 } }, nonce: 0, stop: 0, resume: 0, status: 'live', sent: 2, nextAt: Date.now() + 8000, last: null };
+    const mem = { settings: null, chats: { 'demo-a': { ttl: '5m', isOn: true, pingNonce: 0, stopNonce: 0, resumeNonce: 0 } }, nonce: 0, stop: 0, resume: 0, status: 'live', sent: 2, nextAt: Date.now() + 8000, warmAt: Date.now() + 8000 - 270000, last: null };
     return async (cmd, args) => {
       if (cmd === 'save_settings') { mem.settings = JSON.parse(args.text); return; }
       if (cmd === 'save_chat') {
@@ -300,7 +317,7 @@
         const a = mem.chats['demo-a'];
         if (args.sid === 'demo-a' && a.pingNonce !== mem.nonce) {
           mem.nonce = a.pingNonce;
-          mem.sent++; mem.nextAt = Date.now() + 270000;
+          mem.sent++; mem.warmAt = Date.now(); mem.nextAt = mem.warmAt + 270000;
           mem.last = { at: Date.now(), read: 146900, write: 0, out: 1 };
         }
         if (args.sid === 'demo-a' && a.stopNonce !== mem.stop) { mem.stop = a.stopNonce; mem.status = 'stopped'; }
@@ -312,11 +329,11 @@
       // 真的 mod 发一次保活要一两秒，这段时间倒计时停在 0。
       // URL 带 #busy 时当作正在对话。
       if (location.hash === '#busy') mem.status = 'busy';
-      if (mem.status === 'live' && t >= mem.nextAt + 1500) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
+      if (mem.status === 'live' && t >= mem.nextAt + 1500) { mem.sent++; mem.warmAt = t; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
       return {
         now: t, settings: mem.settings,
         focusKnown: true, focus: location.hash === '#b' ? 'demo-b' : 'demo-a', chats: mem.chats,
-        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: t, status: mem.status, nextAt: mem.status === 'live' ? mem.nextAt : null, note: '', last: mem.last, activeAt: t, beat: t, canStop: true, compactCheck: demoCheck(mem.chats['demo-a']) }],
+        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: mem.warmAt, status: mem.status, nextAt: mem.status === 'live' ? mem.nextAt : null, note: '', last: mem.last, activeAt: t, beat: t, canStop: true, compactCheck: demoCheck(mem.chats['demo-a']) }],
       };
     };
     // 假装 Claude Code 照单全收：窗口就是设的值。
