@@ -139,8 +139,9 @@
       cc.style.minWidth = '';
       cc.textContent = `保活 ${sent}/${rt.max}`;
     }
-    const short = { stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重载' };
-    $('ccd').textContent = cd ?? short[status] ?? '—';
+    const short = { busy: '对话中', stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重载' };
+    // 对话中胶囊里不放那个还没开始数的时间，跟面板右上角一样写「对话中」。
+    $('ccd').textContent = (ok ? cd : null) ?? short[status] ?? '—';
     $('ccd').classList.toggle('off', !ok);
     // 正在数才有东西可停，停了才有东西可续；过期了两样都没有。
     $('chip').classList.toggle('can-stop', ok);
@@ -289,6 +290,8 @@
       if (cmd !== 'snapshot') return;
       const t = Date.now();
       // 真的 mod 发一次保活要一两秒，这段时间倒计时停在 0。
+      // URL 带 #busy 时当作正在对话。
+      if (location.hash === '#busy') mem.status = 'busy';
       if (mem.status === 'live' && t >= mem.nextAt + 1500) { mem.sent++; mem.nextAt = t + 270000; mem.last = { at: t, read: 146900, write: 0, out: 1 }; }
       return {
         now: t, settings: mem.settings,
