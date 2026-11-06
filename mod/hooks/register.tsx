@@ -6,6 +6,10 @@ import type { Chat, Ping, Prefs, Run, Tier, Tiers, Ttl } from '../types'
 const TTL_SECONDS: Record<Ttl, number> = { '5m': 300, '1h': 3600 }
 const MIN_IV = 30
 const MAX_COUNT = 48
+// The auto-compact window the capsule's slider covers; Claude Code itself
+// takes 100k to 1M and holds it to the model's own window.
+const COMPACT_MIN = 200_000
+const COMPACT_MAX = 1_000_000
 // While the window is gone, look again this often instead of pinging.
 const CLOSED_RECHECK_MS = 20_000
 // The capsule treats a session as gone when its file has not been touched for
@@ -17,7 +21,14 @@ const WAITS_ON_PERSON = ['AskUserQuestion', 'ExitPlanMode'] as const
 
 const DEFAULT_TIERS: Tiers = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } }
 // A chat the capsule has never switched on keeps nothing alive.
-const DEFAULT_CHAT: Chat = { ttl: '5m', isOn: false, pingNonce: 0, stopNonce: 0, resumeNonce: 0 }
+const DEFAULT_CHAT: Chat = {
+  ttl: '5m',
+  isOn: false,
+  pingNonce: 0,
+  stopNonce: 0,
+  resumeNonce: 0,
+  compact: { '5m': null, '1h': null },
+}
 const DEFAULTS: Prefs = { ...DEFAULT_CHAT, tiers: DEFAULT_TIERS }
 const IDLE_RUN: Run = { ttl: '5m', sent: 0, nextAt: null, warmAt: null, status: 'empty', note: '' }
 
@@ -28,6 +39,11 @@ const FORK_PROMPT = 'Cache keep-alive. Reply with one character: .'
 const prefs = atom({ plugin: 'cache-keepalive', key: 'prefs' } as const, DEFAULTS)
 const run = atom({ plugin: 'cache-keepalive', key: 'run' } as const, IDLE_RUN)
 const last = atom({ plugin: 'cache-keepalive', key: 'last' } as const, null as Ping)
+
+function compactOf(v: unknown): number | null {
+  const n = Number(v)
+  return v != null && Number.isFinite(n) && n > 0 ? Math.min(COMPACT_MAX, Math.max(COMPACT_MIN, Math.round(n))) : null
+}
 
 /** `settings.json` holds the tiers every chat shares, `chats/<session>.json` this chat's own switch. */
 function mergePrefs(settings: unknown, chat: unknown): Prefs {
@@ -46,17 +62,21 @@ function mergePrefs(settings: unknown, chat: unknown): Prefs {
     pingNonce: Number(c.pingNonce) || 0,
     stopNonce: Number(c.stopNonce) || 0,
     resumeNonce: Number(c.resumeNonce) || 0,
+    compact: { '5m': compactOf(c.compact?.['5m']), '1h': compactOf(c.compact?.['1h']) },
     tiers: { '5m': tier('5m'), '1h': tier('1h') },
   }
 }
 
 // Main-thread and helper requests both follow the env, so the fork reads the
-// cache at the same TTL the conversation wrote it with. Switched off, the mod
-// unsets both and Claude Code picks its own TTL again.
-async function applyTtl($: EngineInterface, p: Prefs) {
+// cache at the same TTL the conversation wrote it with. The auto-compact
+// window is the chosen TTL's own, read by Claude Code at every check.
+// Switched off, the mod unsets all three and Claude Code picks its own again.
+async function applyEnv($: EngineInterface, p: Prefs) {
   const ttl = p.isOn ? p.ttl : undefined
+  const compact = p.isOn ? p.compact[p.ttl] : null
   await $.env.set('CLAUDE_CODE_PROMPT_CACHE_TTL', ttl)
   await $.env.set('CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', ttl)
+  await $.env.set('CLAUDE_CODE_AUTO_COMPACT_WINDOW', compact === null ? undefined : String(compact))
 }
 
 /**
@@ -211,7 +231,8 @@ async function syncPrefs($: EngineInterface, t: number) {
   if (text === loadedPrefs) return before
   loadedPrefs = text
   await update($, prefs, () => after)
-  if (after.ttl !== before.ttl || after.isOn !== before.isOn) await applyTtl($, after)
+  const envOf = (p: Prefs) => `${p.isOn && p.ttl} ${p.isOn && p.compact[p.ttl]}`
+  if (envOf(after) !== envOf(before)) await applyEnv($, after)
   // Keep the countdown's start, move its end to the new interval.
   const was = before.tiers
   await update($, run, (x): Run =>
@@ -284,7 +305,7 @@ export const register: Register = on => {
     seenStop = saved.stopNonce
     seenResume = saved.resumeNonce
     await update($, prefs, () => saved)
-    await applyTtl($, saved)
+    await applyEnv($, saved)
     $.clock.every(1000, () => void tick($))
 
     return next(e)

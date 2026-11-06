@@ -10,9 +10,18 @@ export type Tiers = { '5m': Tier; '1h': Tier }
  * What the capsule writes to `chats/<session>.json`, one per chat; a chat
  * with no file is off. `pingNonce` is a counter it bumps for "keep alive
  * now", `stopNonce` one for "stop until the next turn" and `resumeNonce` one
- * to take that back; the mod acts when a number changes.
+ * to take that back; the mod acts when a number changes. `compact` is the
+ * token count each TTL's auto-compact window is held to, `null` where the
+ * chat leaves Claude Code its own.
  */
-export type Chat = { ttl: Ttl; isOn: boolean; pingNonce: number; stopNonce: number; resumeNonce: number }
+export type Chat = {
+  ttl: Ttl
+  isOn: boolean
+  pingNonce: number
+  stopNonce: number
+  resumeNonce: number
+  compact: Record<Ttl, number | null>
+}
 
 /** Both files as this session reads them. */
 export type Prefs = Chat & { tiers: Tiers }

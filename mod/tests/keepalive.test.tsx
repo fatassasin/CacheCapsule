@@ -428,3 +428,32 @@ test('an interrupted turn keeps counting down from the cache the last turn wrote
   await clock.advance(1_000)
   expect(state(disk)).toMatchObject({ status: 'error', note: '本轮没有写入缓存' })
 })
+
+test("the auto-compact window follows this chat's choice for the TTL in use", async ($, on) => {
+  const clock = mock.clock(on, { now: 1_000_000 })
+  mock.store(on)
+  const disk = files(on)
+  const sets: string[] = []
+  const forks = { n: 0 }
+  common(on, forks, sets)
+  const withCompact = (ttl: '5m' | '1h', isOn: boolean) =>
+    JSON.stringify({ ttl, isOn, compact: { '5m': 400_000, '1h': 50_000 } })
+  disk.set(CHAT, withCompact('5m', true))
+
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  expect(sets).toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000')
+
+  // The 1h tier keeps its own, held to the slider's floor.
+  disk.set(CHAT, withCompact('1h', true))
+  await clock.advance(1_000)
+  expect(sets.at(-1)).toBe('CLAUDE_CODE_AUTO_COMPACT_WINDOW=200000')
+
+  disk.set(CHAT, withCompact('1h', false))
+  await clock.advance(1_000)
+  expect(sets.at(-1)).toBe('CLAUDE_CODE_AUTO_COMPACT_WINDOW=undefined')
+
+  // Never chosen: Claude Code keeps its own window.
+  disk.set(CHAT, chat('5m', true))
+  await clock.advance(1_000)
+  expect(sets.at(-1)).toBe('CLAUDE_CODE_AUTO_COMPACT_WINDOW=undefined')
+})

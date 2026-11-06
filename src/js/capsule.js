@@ -9,6 +9,7 @@
   const TTL = { '5m': 300, '1h': 3600 };
   const STEP = { '5m': 10, '1h': 60 };
   const MIN_IV = 30, MAX_COUNT = 48;
+  const COMPACT_MIN = 200000, COMPACT_MAX = 1000000;
   const FRESH_MS = 20000; // mod 隔几秒写一次心跳，超过这么久没动静就当那个会话没了
   const DEFAULT_TIERS = { '5m': { iv: 270, max: 6 }, '1h': { iv: 3300, max: 3 } };
   const STATUS = {
@@ -21,6 +22,8 @@
   const fmt = s => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, '0')}`;
   const parse = v => { const m = String(v).trim().match(/^(\d+)(?::(\d{1,2}))?$/); return m ? (+m[1]) * 60 + (+(m[2] ?? 0)) : null; };
   const human = s => { const m = Math.round(s / 60); return m >= 120 ? `${(m / 60).toFixed(1)} 小时` : `${m} 分钟`; };
+  const compactOf = v => { const n = Number(v); return v != null && n > 0 ? Math.min(COMPACT_MAX, Math.max(COMPACT_MIN, Math.round(n))) : null; };
+  const kTokens = n => n >= 1000000 ? `${n / 1000000}M` : `${n / 1000}k`;
   const clampIv = (ttl, s) => Math.min(TTL[ttl] - 5, Math.max(MIN_IV, Math.round(s)));
 
   // 各档的间隔和次数所有聊天共用（settings.json）。
@@ -39,6 +42,8 @@
       ttl: c.ttl === '1h' ? '1h' : '5m', isOn: c.isOn === true,
       pingNonce: Number(c.pingNonce) || 0,
       stopNonce: Number(c.stopNonce) || 0, resumeNonce: Number(c.resumeNonce) || 0,
+      // 自动压缩窗口也按档各一份；null 是没动过，交给 Claude Code 自己。
+      compact: { '5m': compactOf((c.compact || {})['5m']), '1h': compactOf((c.compact || {})['1h']) },
     };
   }
 
@@ -102,6 +107,15 @@
     $('ivHint').classList.toggle('warn', t.iv >= TTL[ttl] - STEP[ttl]);
     $('max').textContent = t.max;
     $('span').textContent = `最多保到 ≈ ${human(TTL[ttl] + t.max * t.iv)}`;
+    const compact = chat.compact[ttl], slider = $('compact');
+    slider.value = (compact ?? COMPACT_MAX) / 1000;
+    slider.disabled = !sid;
+    slider.classList.toggle('unset', compact === null);
+    slider.style.setProperty('--fill', `${(slider.value - slider.min) / (slider.max - slider.min) * 100}%`);
+    $('compactVal').textContent = compact === null ? '默认' : kTokens(compact);
+    $('compactVal').classList.toggle('mute', compact === null);
+    $('compactHint').textContent = compact === null ? '没设过，按 Claude Code 自己的窗口'
+      : chat.isOn ? `上下文到 ${kTokens(compact)} 前就自动压缩` : '保活开着才生效';
 
     const label = STATUS[status] + (run && run.note && status !== 'live' ? ` · ${run.note}` : '');
     const cdEl = $('cd');
@@ -196,6 +210,8 @@
     if (s == null) draw(); else tierOf(chat.ttl, t => ({ ...t, iv: s }));
     e.target.blur();
   };
+  // 拖动时每跨一格就存一次，一次拖动最多十几格。
+  $('compact').oninput = e => saveChat(c => { c.compact = { ...c.compact, [c.ttl]: e.target.value * 1000 }; return c; });
   $('iv').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
   // 立即保活：把计数加一，由 mod 看到变化后去发。
   $('now').onclick = () => saveChat(c => { c.pingNonce += 1; return c; });

@@ -91,6 +91,15 @@ body {
 .ctl span { min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; }
 .ctl input { all: unset; width: 62px; text-align: center; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text); user-select: text; -webkit-user-select: text; cursor: text; }
 
+.slide { display: inline-flex; align-items: center; gap: 10px; }
+.slide b { min-width: 42px; text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; }
+.slide b.mute { color: var(--mute); font-weight: 400; }
+.slide input { -webkit-appearance: none; appearance: none; width: 150px; height: 4px; border-radius: 99px; margin: 0; cursor: pointer;
+  background: linear-gradient(to right, var(--ju) var(--fill, 100%), rgba(255, 255, 255, .1) var(--fill, 100%)); }
+.slide input.unset { background: rgba(255, 255, 255, .1); }
+.slide input::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; border-radius: 50%; background: var(--text); border: 0; box-shadow: 0 1px 3px rgba(0, 0, 0, .5); }
+.slide input:disabled { opacity: .4; cursor: default; }
+
 .meter .top { display: flex; justify-content: space-between; font-size: 13px; color: var(--dim); margin-bottom: 7px; }
 .meter .top b { color: var(--text); font-variant-numeric: tabular-nums; font-weight: 600; }
 .meter .top b.mute { color: var(--mute); }
