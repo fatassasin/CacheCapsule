@@ -85,7 +85,7 @@
   // 自动压缩有没有真的生效，听 mod 回报的：Claude Code 自己量上下文用的窗口和它的来源
   // （就是桌面版 context window 弹窗里那个数）。第二项为真时标成警告色。
   function compactHintOf(compact) {
-    if (compact === null) return ['没设过，按 Claude Code 自己的窗口', false];
+    if (compact === null) return ['没设过，用 Claude Code 默认', false];
     if (!chat.isOn) return ['保活开着才生效', false];
     const c = run && run.compactCheck;
     if (!run) return ['等这个对话的 mod 回报…', false];
@@ -93,8 +93,8 @@
     if (!c || c.want !== compact) return ['正在应用…', false];
     if (c.deny) return [`没生效：${c.deny}`, true];
     if (c.window == null) return [`已设 ${kTokens(compact)} · 下条消息后确认`, false];
-    if (c.source === 'env') return [`已生效 · 窗口 ${kTokens(c.window)}，快满时自动压缩`, false];
-    return [`没生效 · Claude Code 仍按 ${kTokens(c.window)}（${c.source}）`, true];
+    if (c.source === 'env') return [`已生效 · 快满 ${kTokens(c.window)} 时压缩`, false];
+    return [`没生效 · 仍按 ${kTokens(c.window)}（${c.source}）`, true];
   }
 
   function draw() {
@@ -134,6 +134,7 @@
     $('compactVal').classList.toggle('mute', compact === null);
     const [hint, isOff] = compactHintOf(compact);
     $('compactHint').textContent = hint;
+    $('compactHint').title = hint;
     $('compactHint').classList.toggle('warn', isOff);
 
     const label = STATUS[status] + (run && run.note && status !== 'live' ? ` · ${run.note}` : '');

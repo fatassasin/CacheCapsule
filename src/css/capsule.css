@@ -78,6 +78,9 @@ body {
 .row .lbl { font-size: 14.5px; }
 .row .sub { font-size: 12px; color: var(--mute); margin-top: 1px; }
 .row .sub.warn { color: var(--ju); }
+/* 拖滑块时提示一直在变，折行就会让面板忽高忽低：钉成一行，完整的放在悬停提示里。 */
+.row .grow { flex: 1; min-width: 0; }
+#compactHint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .sw { all: unset; cursor: pointer; width: 38px; height: 22px; border-radius: 999px; background: rgba(255, 255, 255, .14); position: relative; flex: none; transition: background .15s; }
 .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: var(--text); transition: left .15s; }
