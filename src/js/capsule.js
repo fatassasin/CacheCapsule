@@ -15,8 +15,8 @@
   const STATUS = {
     live: '保活中', busy: '对话中', done: '已用完', off: '已关闭', closed: '窗口已关闭',
     empty: '等待首条回复', expired: '缓存已过期', error: '出错', stopped: '已停止 · 下条消息后恢复', resuming: '恢复中',
-    nochat: '未打开对话', nomod: '未加载 · 在本对话运行 /reload-plugins',
-    oldmod: '停止需先在本对话运行 /reload-plugins',
+    nochat: '未打开对话', nomod: '未加载 · 完全退出 Claude 再打开',
+    oldmod: 'mod 太旧，停止需先完全退出 Claude 再打开',
   };
 
   const fmt = s => `${Math.floor(s / 60)}:${String(Math.max(0, s) % 60).padStart(2, '0')}`;
@@ -89,7 +89,7 @@
     if (!chat.isOn) return ['保活开着才生效', false];
     const c = run && run.compactCheck;
     if (!run) return ['等这个对话的 mod 回报…', false];
-    if (c === undefined) return ['mod 太旧，没回报 · 在本对话运行 /reload-plugins', true];
+    if (c === undefined) return ['mod 太旧，没回报 · 完全退出 Claude 再打开', true];
     if (!c || c.want !== compact) return ['正在应用…', false];
     if (c.deny) return [`没生效：${c.deny}`, true];
     if (c.window == null) return [`已设 ${kTokens(compact)} · 下条消息后确认`, false];
@@ -155,7 +155,7 @@
       cc.style.minWidth = '';
       cc.textContent = `保活 ${sent}/${rt.max}`;
     }
-    const short = { busy: '对话中', stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重载' };
+    const short = { busy: '对话中', stopped: '停止', expired: '过期', resuming: '…', oldmod: '需重启' };
     // 对话中胶囊里不放那个还没开始数的时间，跟面板右上角一样写「对话中」。
     $('ccd').textContent = (ok ? cd : null) ?? short[status] ?? '—';
     $('ccd').classList.toggle('off', !ok);

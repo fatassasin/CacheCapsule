@@ -22,7 +22,7 @@ Claude 桌面端（Windows）的缓存保活小胶囊。独立的 Tauri 程序�
 
 - `settings.json`：胶囊写、mod 每秒读。`{tiers:{'5m':{iv,max},'1h':{iv,max}}}`，各档的间隔和次数，所有聊天共用。
 - `chats/<会话>.json`：胶囊写、mod 每秒读。`{ttl, isOn, pingNonce, stopNonce, resumeNonce, compact}`，每个聊天自己一份；没有文件就是关，只有在这个聊天里打开过开关才会写。胶囊最左边的圆点橙色表示这个聊天的开关开着，灰色是关着。只认鼠标点击，留在按钮上的键盘焦点按空格、回车不会拨动开关。打断后改发、回到某条消息重来（rewind）时桌面版会给这个聊天另起一个会话，胶囊顺着会话记录里的 `rewindEdges` 把先前会话的开关和档位抄给新会话（计数归零）；分叉出去的聊天不抄。`compact` 是 `{'5m','1h'}` 各档的自动压缩窗口（20 万到 100 万 token，滑块拖过才有，没有就交给 Claude Code 自己）：保活开着时，mod 把当前档的值写进 `CLAUDE_CODE_AUTO_COMPACT_WINDOW`，Claude Code 每次检查都会重读它，并按模型自身窗口封顶。mod 设完会读回这个变量，再问 Claude Code 它量上下文用的窗口和来源（就是桌面版 context window 弹窗里的数），写进 `state/<会话>.json` 的 `compactCheck`；胶囊的提示据此写「已生效」或「没生效」及原因。`pingNonce` 加一即「立即保活」。胶囊悬停时右端浮出 ⏹ / ▶：`stopNonce` 加一停止这段空闲的保活（状态 `stopped`），`resumeNonce` 加一接着原来的倒计时续上；缓存过期时两者都不出现。不管停止还是过期，只要开关开着，下一条消息写入缓存后就自动重新保活；对话进行中按 ⏹ 不起作用。
-- `state/<会话>.json`：mod 写、胶囊读。含 `sid ttl sent nextAt warmAt status note last activeAt beat ended`；`canStop` 表示这个 mod 认得停止键，旧版没有它时胶囊提示先 `/reload-plugins`。`beat` 是心跳，20 秒没更新就当会话没了。
+- `state/<会话>.json`：mod 写、胶囊读。含 `sid ttl sent nextAt warmAt status note last activeAt beat ended`；`canStop` 表示这个 mod 认得停止键，旧版没有它时胶囊提示先重启 Claude。`beat` 是心跳，20 秒没更新就当会话没了。
 - `capsule.json`：胶囊自己的，`{offR, offB}`。
 
 `<会话>` 是 Claude Code 的会话 id。胶囊只显示桌面版眼下打开的那个聊天：桌面版切聊天时会改
@@ -39,9 +39,9 @@ claude plugin marketplace add "<本目录>\mod"
 claude plugin install cache-keepalive@cachecapsule --scope user
 ```
 
-装好后已经开着的聊天要 `/reload-plugins` 或重开才会加载。改了 `mod/` 之后用 `claude plugin update cache-keepalive@cachecapsule` 更新缓存里的副本。
+装好或更新后，已经开着的聊天要等 Claude Code 进程重新启动才会加载新版：`/reload-plugins` 不会换掉已装插件的 hooks 模块，要从托盘完全退出 Claude 桌面版再打开。改了 `mod/` 之后用 `claude plugin update cache-keepalive@cachecapsule` 更新缓存里的副本。
 用 CC Switch 管 `~/.claude/settings.json` 的话，它切换配置时会用自己库里的副本覆盖，`enabledPlugins` 和 `extraKnownMarketplaces` 也要写进 CC Switch 当前供应商的配置里。
-开关打开、但胶囊显示「未加载 · 在本对话运行 /reload-plugins」，就是这个聊天在装 mod 之前就开着，还没加载它。
+开关打开、但胶囊显示「未加载 · 完全退出 Claude 再打开」，就是这个聊天在装 mod 之前就开着，还没加载它。
 
 测试：`cd mod && CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1 claude plugin test .`
 
