@@ -230,7 +230,7 @@
     if (s == null) draw(); else tierOf(chat.ttl, t => ({ ...t, iv: s }));
     e.target.blur();
   };
-  // 拖动时每跨一格就存一次，一次拖动最多十几格。
+  // 拖动时每跨一格就存一次，一次拖动最多三十来格。
   $('compact').oninput = e => saveChat(c => { c.compact = { ...c.compact, [c.ttl]: e.target.value * 1000 }; return c; });
   $('iv').onkeydown = e => { if (e.key === 'Enter') e.target.blur(); };
   // 立即保活：把计数加一，由 mod 看到变化后去发。
