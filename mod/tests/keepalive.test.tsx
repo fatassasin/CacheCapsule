@@ -438,10 +438,20 @@ test("the auto-compact window follows this chat's choice for the TTL in use", as
   common(on, forks, sets)
   const withCompact = (ttl: '5m' | '1h', isOn: boolean) =>
     JSON.stringify({ ttl, isOn, compact: { '5m': 400_000, '1h': 50_000 } })
+  // Claude Code's own window: the model's million, or the variable when set.
+  on('session.usage', () => {
+    const v = sets.findLast(s => s.startsWith('CLAUDE_CODE_AUTO_COMPACT_WINDOW='))?.split('=')[1]
+    const isSet = v !== undefined && v !== 'undefined'
+    const breakdown = { rawMaxTokens: isSet ? Number(v) : 1_000_000, autocompactSource: isSet ? 'env' : 'auto' }
+    return { value: { startedAt: 0, context: { window: 1_000_000, breakdown }, rateLimits: {}, cost: { usd: 0 } } as any }
+  })
   disk.set(CHAT, withCompact('5m', true))
 
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   expect(sets).toContain('CLAUDE_CODE_AUTO_COMPACT_WINDOW=400000')
+  await clock.advance(1_000)
+  // What Claude Code made of it goes to the capsule.
+  expect(state(disk)).toMatchObject({ compactCheck: { want: 400_000, deny: null, window: 400_000, source: 'env' } })
 
   // The 1h tier keeps its own, held to the slider's floor.
   disk.set(CHAT, withCompact('1h', true))
@@ -451,6 +461,7 @@ test("the auto-compact window follows this chat's choice for the TTL in use", as
   disk.set(CHAT, withCompact('1h', false))
   await clock.advance(1_000)
   expect(sets.at(-1)).toBe('CLAUDE_CODE_AUTO_COMPACT_WINDOW=undefined')
+  expect(state(disk)).toMatchObject({ compactCheck: { want: null, window: 1_000_000, source: 'auto' } })
 
   // Never chosen: Claude Code keeps its own window.
   disk.set(CHAT, chat('5m', true))

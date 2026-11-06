@@ -43,7 +43,21 @@ export type Run = {
   note: string
 }
 
-export type Ping = { at: number; read: number; write: number; out: number } | null
+/**
+ * The auto-compact window as this session last found it: `want` what the
+ * mod set (`null`: unset), `deny` why the engine refused the write, `env` the
+ * variable read back, `window` and `source` the window Claude Code measures
+ * against and what decided it (`env` when the variable did).
+ */
+export type CompactCheck = {
+  want: number | null
+  deny: string | null
+  env: string | null
+  window: number | null
+  source: string | null
+}
+
+export type Ping ={ at: number; read: number; write: number; out: number } | null
 
 declare module 'claude-code' {
   interface PluginState {

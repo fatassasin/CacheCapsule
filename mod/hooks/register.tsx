@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Chat, Ping, Prefs, Run, Tier, Tiers, Ttl } from '../types'
+import type { Chat, CompactCheck, Ping, Prefs, Run, Tier, Tiers, Ttl } from '../types'
 
 const TTL_SECONDS: Record<Ttl, number> = { '5m': 300, '1h': 3600 }
 const MIN_IV = 30
@@ -76,7 +76,35 @@ async function applyEnv($: EngineInterface, p: Prefs) {
   const compact = p.isOn ? p.compact[p.ttl] : null
   await $.env.set('CLAUDE_CODE_PROMPT_CACHE_TTL', ttl)
   await $.env.set('CLAUDE_CODE_SUBAGENT_PROMPT_CACHE_TTL', ttl)
-  await $.env.set('CLAUDE_CODE_AUTO_COMPACT_WINDOW', compact === null ? undefined : String(compact))
+  const res = await $.env.set('CLAUDE_CODE_AUTO_COMPACT_WINDOW', compact === null ? undefined : String(compact))
+  compactCheck = { want: compact, deny: res?.deny ?? null, env: null, window: null, source: null }
+  await checkWindow($)
+}
+
+/**
+ * What Claude Code made of the auto-compact window: the variable as it reads
+ * it back, and the window it measures against (the figure the desktop's
+ * context popup shows) with where that came from. The capsule shows it so a
+ * value that did not take is seen, not guessed at.
+ */
+async function checkWindow($: EngineInterface) {
+  if (compactCheck === null) return
+  let env: string | null = null
+  let window: number | null = null
+  let source: string | null = null
+  try {
+    env = (await $.env.get('CLAUDE_CODE_AUTO_COMPACT_WINDOW')) ?? null
+  } catch {
+    // Leave it unknown.
+  }
+  try {
+    const b = (await $.session.usage({ breakdown: 'summary' })).context.breakdown
+    window = b?.rawMaxTokens ?? null
+    source = b?.autocompactSource ?? null
+  } catch {
+    // No session bound yet: the next turn checks again.
+  }
+  compactCheck = { ...compactCheck, env, window, source }
 }
 
 /**
@@ -117,6 +145,7 @@ let hasSettings = false
 // When this turn's last answered main-thread request went out. The cache's
 // TTL runs from the request, not from when its reply finished streaming.
 let stepAt: number | undefined
+let compactCheck: CompactCheck | null = null
 
 /**
  * Where the capsule and this mod meet: `settings.json` and `chats/<session>.json`
@@ -147,7 +176,7 @@ async function writeState($: EngineInterface, t: number, isEnded = false) {
   const l = await read($, last)
   const sid = await $.session.id()
   // `canStop` tells the capsule this mod knows the stop button; an older one would ignore it.
-  const body = { sid, ttl: r.ttl, sent: r.sent, nextAt: r.nextAt, warmAt: r.warmAt, status: r.status, note: r.note, last: l, activeAt, ended: isEnded, canStop: true }
+  const body = { sid, ttl: r.ttl, sent: r.sent, nextAt: r.nextAt, warmAt: r.warmAt, status: r.status, note: r.note, last: l, activeAt, ended: isEnded, canStop: true, compactCheck }
   const text = JSON.stringify(body)
   // Only the heartbeat changes between identical states.
   if (!isEnded && text === lastWritten && t - lastBeat < BEAT_MS) return
@@ -369,6 +398,7 @@ export const register: Register = on => {
             : { ...r, nextAt: null, status: 'error', note: '本轮没有写入缓存' },
         )
       }
+      await checkWindow($)
       await writeState($, t)
     }
 

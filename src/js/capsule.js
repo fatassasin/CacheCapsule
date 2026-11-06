@@ -82,6 +82,21 @@
     return 'live';
   }
 
+  // 自动压缩有没有真的生效，听 mod 回报的：Claude Code 自己量上下文用的窗口和它的来源
+  // （就是桌面版 context window 弹窗里那个数）。第二项为真时标成警告色。
+  function compactHintOf(compact) {
+    if (compact === null) return ['没设过，按 Claude Code 自己的窗口', false];
+    if (!chat.isOn) return ['保活开着才生效', false];
+    const c = run && run.compactCheck;
+    if (!run) return ['等这个对话的 mod 回报…', false];
+    if (c === undefined) return ['mod 太旧，没回报 · 在本对话运行 /reload-plugins', true];
+    if (!c || c.want !== compact) return ['正在应用…', false];
+    if (c.deny) return [`没生效：${c.deny}`, true];
+    if (c.window == null) return [`已设 ${kTokens(compact)} · 下条消息后确认`, false];
+    if (c.source === 'env') return [`已生效 · 窗口 ${kTokens(c.window)}，快满时自动压缩`, false];
+    return [`没生效 · Claude Code 仍按 ${kTokens(c.window)}（${c.source}）`, true];
+  }
+
   function draw() {
     const ttl = chat.ttl, t = settings.tiers[ttl];
     const status = statusOf(), ok = status === 'live';
@@ -114,8 +129,9 @@
     slider.style.setProperty('--fill', `${(slider.value - slider.min) / (slider.max - slider.min) * 100}%`);
     $('compactVal').textContent = compact === null ? '默认' : kTokens(compact);
     $('compactVal').classList.toggle('mute', compact === null);
-    $('compactHint').textContent = compact === null ? '没设过，按 Claude Code 自己的窗口'
-      : chat.isOn ? `上下文到 ${kTokens(compact)} 前就自动压缩` : '保活开着才生效';
+    const [hint, isOff] = compactHintOf(compact);
+    $('compactHint').textContent = hint;
+    $('compactHint').classList.toggle('warn', isOff);
 
     const label = STATUS[status] + (run && run.note && status !== 'live' ? ` · ${run.note}` : '');
     const cdEl = $('cd');
@@ -296,8 +312,13 @@
       return {
         now: t, settings: mem.settings,
         focusKnown: true, focus: location.hash === '#b' ? 'demo-b' : 'demo-a', chats: mem.chats,
-        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: t, status: mem.status, nextAt: mem.status === 'live' ? mem.nextAt : null, note: '', last: mem.last, activeAt: t, beat: t, canStop: true }],
+        states: [{ sid: 'demo-a', ttl: '5m', sent: mem.sent, warmAt: t, status: mem.status, nextAt: mem.status === 'live' ? mem.nextAt : null, note: '', last: mem.last, activeAt: t, beat: t, canStop: true, compactCheck: demoCheck(mem.chats['demo-a']) }],
       };
     };
+    // 假装 Claude Code 照单全收：窗口就是设的值。
+    function demoCheck(c) {
+      const want = c && c.isOn && c.compact ? c.compact[c.ttl] ?? null : null;
+      return { want, deny: null, env: want === null ? null : String(want), window: want ?? 1000000, source: want === null ? 'auto' : 'env' };
+    }
   }
 })();
