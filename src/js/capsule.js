@@ -100,12 +100,15 @@
   function draw() {
     const ttl = chat.ttl, t = settings.tiers[ttl];
     const status = statusOf(), ok = status === 'live';
-    const runTtl = run ? run.ttl : ttl, rt = settings.tiers[runTtl];
+    // 正在数的那一轮按它写缓存时的档；对话中或没在数时，下一轮按现在选的档，
+    // 改这一档的次数和间隔要立刻反映出来。
+    const isCounting = !!run && run.nextAt != null && status !== 'busy';
+    const runTtl = isCounting ? run.ttl : ttl, rt = settings.tiers[runTtl];
     const sent = run ? run.sent : 0;
     const left = ok ? Math.max(0, Math.ceil((run.nextAt - now) / 1000)) : 0;
     // 对话中虽然还没开始数，也给一个时间：就是下一轮满格的间隔。
     const cd = ok ? fmt(left) : status === 'busy' ? fmt(rt.iv) : null;
-    const pending = run && run.ttl !== ttl && run.nextAt != null;
+    const pending = isCounting && run.ttl !== ttl;
 
     $('pop').hidden = !open;
     document.querySelectorAll('#seg button').forEach(b => b.classList.toggle('on', b.dataset.ttl === ttl));
